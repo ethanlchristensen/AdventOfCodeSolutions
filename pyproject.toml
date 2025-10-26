@@ -1,0 +1,20 @@
+[project]
+name = "adventofcode2025"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "ethanlchristensen",email = "ethanlchristensen@outlook.com"}
+]
+readme = "README.md"
+requires-python = ">=3.13,<4.0"
+dependencies = [
+    "requests (>=2.32.5,<3.0.0)",
+    "numpy (>=2.3.4,<3.0.0)",
+    "bruhanimate (>=0.2.93,<0.3.0)",
+    "networkx (>=3.5,<4.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
