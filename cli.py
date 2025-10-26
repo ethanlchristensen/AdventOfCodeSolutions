@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Advent of Code CLI Tool
-Handles setup, data downloading, and solution running for Advent of Code
-"""
-
 import argparse
 import os
 import sys
@@ -14,8 +8,8 @@ import importlib.util
 import time
 
 
-DEFAULT_YEAR = 2024  # Update this each year
-SESSION_FILE = ".aoc_session"  # Store your session cookie here
+DEFAULT_YEAR = 2025
+SESSION_FILE = ".aoc_session"
 
 
 SOLUTION_TEMPLATE = '''"""
