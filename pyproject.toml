@@ -13,7 +13,6 @@ dependencies = [
     "bruhanimate (>=0.2.93,<0.3.0)",
     "networkx (>=3.5,<4.0)",
     "pywin32 (>=311,<312) ; sys_platform == \"win32\"",
-    "pyaudio (>=0.2.14,<0.3.0) ; sys_platform == \"win64\"",
 ]
 
 

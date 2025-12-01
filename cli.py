@@ -48,6 +48,74 @@ if __name__ == "__main__":
     solution.solve()
 '''
 
+ANIMATION_TEMPLATE = '''"""
+Advent of Code {year} - Day {day} Animation
+"""
+
+from bruhanimate import (
+    Screen,
+    BaseEffect,
+    Buffer,
+    EffectRenderer,
+    SnowEffect
+)
+
+class AdventOfCodeDay{day:02d}Effect(BaseEffect):
+    def __init__(
+        self,
+        buffer: Buffer,
+        background: str,
+        part: str = "one",
+        data_file: str = "data",
+        second_effect: SnowEffect | None = None,
+        second_effect_halt: int = 1,
+    ):
+        super().__init__(buffer, background)
+        self.part = part
+        self.data_file = data_file
+        self.second_effect = second_effect
+        self.second_effect_halt = second_effect_halt
+        self.data = None
+
+        self._load_data()
+    
+    def _load_data(self):
+        with open(self.data_file, "r") as f:
+            self.data = f.read().strip()
+
+    def render_frame(self, frame_number: int):
+        if frame_number % self.second_effect_halt == 0:
+            if self.second_effect is not None:
+                self.second_effect.render_frame(frame_number=frame_number)
+                self.buffer.sync_with(self.second_effect.buffer)
+
+
+def animate(screen):
+    renderer = EffectRenderer(
+        screen=screen,
+        frames=float("inf"),
+        frame_time=0.05,
+        effect_type="static",
+        background=" ",
+        transparent=False,
+    )
+
+    snow = SnowEffect(Buffer(screen.height, screen.width), " ")
+    renderer.effect = AdventOfCodeDay{day:02d}Effect(
+        buffer=Buffer(screen.height, screen.width),
+        background=" ",
+        part="two",
+        data_file="data",
+        second_effect=snow,
+        second_effect_halt=3,
+    )
+
+    renderer.run()
+
+if __name__ in ["__main__", "day{day:02d}_animate"]:
+    Screen.show(animate)
+'''
+
 
 def get_session_cookie():
     """Read session cookie from file."""
@@ -80,7 +148,7 @@ def download_input(year, day):
         return None
 
 
-def setup_day(year, day, download_data=False, verbose=True):
+def setup_day(year, day, download_data=False, animate=False, verbose=True):
     """Set up folder and files for a specific day."""
     # Create year/day folder structure
     day_folder = Path(f"{year}/day{day:02d}")
@@ -126,10 +194,21 @@ def setup_day(year, day, download_data=False, verbose=True):
     if verbose:
         print(f"\n✓ Year {year}, Day {day} setup complete!")
     
+    if animate:
+        animation_file = day_folder / "animate.py"
+        if not animation_file.exists():
+            content = ANIMATION_TEMPLATE.format(year=year, day=day)
+            animation_file.write_text(content)
+            if verbose:
+                print(f"✓ Created {animation_file}")
+        else:
+            if verbose:
+                print(f"⚠ {animation_file} already exists, skipping")
+    
     return file_created, data_downloaded
 
 
-def setup_all_days(year, download_data=False):
+def setup_all_days(year, download_data=False, animate=False):
     """Set up all 25 days for a year."""
     print(f"Setting up all 25 days for year {year}...")
     print("=" * 50)
@@ -139,7 +218,7 @@ def setup_all_days(year, download_data=False):
     
     for day in range(1, 26):
         print(f"\nDay {day:02d}:")
-        file_created, data_downloaded = setup_day(year, day, download_data, verbose=False)
+        file_created, data_downloaded = setup_day(year, day, download_data, animate, verbose=False)
         
         if file_created:
             created_count += 1
@@ -272,9 +351,6 @@ def run_animation(year, day):
     
     try:
         spec.loader.exec_module(module)
-        print(f"\n{'='*50}")
-        print(f"Year {year} - Day {day} - Animation")
-        print('='*50)
         return True
     except Exception as e:
         print(f"Error running animation for year {year}, day {day}: {e}")
@@ -405,6 +481,11 @@ Folder structure:
         action="store_true",
         help="Setup all 25 days for the year"
     )
+    setup_parser.add_argument(
+        "--animate",
+        action="store_true",
+        help="Create an animate.py file in the day's folder"
+    )
     
     # Run command
     run_parser = subparsers.add_parser("run", help="Run solution(s)")
@@ -459,11 +540,11 @@ Folder structure:
     if args.command == "setup":
         if args.all:
             # Setup all 25 days
-            setup_all_days(args.year, args.download)
+            setup_all_days(args.year, args.download, args.animate)
         else:
             # Setup single day
             day = args.day if args.day else get_current_day()
-            setup_day(args.year, day, args.download)
+            setup_day(args.year, day, args.download, args.animate)
     
     elif args.command == "run":
         if args.all:

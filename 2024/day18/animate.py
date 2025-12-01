@@ -222,7 +222,7 @@ def animate(screen: Screen):
         buffer=Buffer(screen.height, screen.width),
         background=" ",
         part="two",
-        data_file="datasmall5", # from advent of code
+        data_file="datasmall",
         second_effect=firework_effect,
         second_effect_halt=3,
     )
@@ -230,5 +230,5 @@ def animate(screen: Screen):
     renderer.run()
 
 
-if __name__ == "__main__":
+if __name__ in ["__main__", "day18_animate"]:
     Screen.show(animate)

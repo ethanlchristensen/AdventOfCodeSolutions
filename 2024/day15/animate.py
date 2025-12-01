@@ -240,5 +240,5 @@ def animate(screen: Screen):
     renderer.run()
 
 
-if __name__ == "__main__":
+if __name__ in ["__main__", "day15_animate"]:
     Screen.show(animate)

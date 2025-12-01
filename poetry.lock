@@ -53,13 +53,14 @@ requests = "*"
 
 [[package]]
 name = "bruhcolor"
-version = "0.0.64"
-description = "256 Color Terminal Text Formatter"
+version = "0.0.65"
+description = "256-color terminal text formatter"
 optional = false
-python-versions = "*"
+python-versions = "<4.0,>=3.8"
 groups = ["main"]
 files = [
-    {file = "bruhcolor-0.0.64.tar.gz", hash = "sha256:9e01b76c24705543e34bff870debfaadc0342ce4538a56a7757d06f4ca06f3dc"},
+    {file = "bruhcolor-0.0.65-py3-none-any.whl", hash = "sha256:481aaaf12660a5a4439deb17e1fb4b7a7cb57716bc3701c0564e1806408c1098"},
+    {file = "bruhcolor-0.0.65.tar.gz", hash = "sha256:806cbdf53804f52a07c663bd8f384bc65866553f48e14c16972fab393dd1092a"},
 ]
 
 [[package]]
