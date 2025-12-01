@@ -8,7 +8,7 @@ import importlib.util
 import time
 
 
-DEFAULT_YEAR = 2025
+DEFAULT_YEAR = datetime.now().year
 SESSION_FILE = ".aoc_session"
 
 
@@ -253,6 +253,77 @@ def run_all_solutions(year=None):
         print(f"Completed {total_solutions} total solutions across {len(year_folders)} years")
 
 
+def run_animation(year, day):
+    """Run animation for a specific day."""
+    day_folder = Path(f"{year}/day{day:02d}")
+    animation_file = day_folder / "animate.py"
+    
+    if not animation_file.exists():
+        print(f"Error: {animation_file} does not exist")
+        return False
+    
+    # Dynamically import and run the animation
+    spec = importlib.util.spec_from_file_location(f"day{day:02d}_animate", animation_file)
+    module = importlib.util.module_from_spec(spec)
+    
+    # Change to the day's directory so it can find its data file
+    original_dir = os.getcwd()
+    os.chdir(day_folder)
+    
+    try:
+        spec.loader.exec_module(module)
+        print(f"\n{'='*50}")
+        print(f"Year {year} - Day {day} - Animation")
+        print('='*50)
+        return True
+    except Exception as e:
+        print(f"Error running animation for year {year}, day {day}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+    finally:
+        os.chdir(original_dir)
+
+
+def list_animations(year=None):
+    """List all solutions that have animation files."""
+    if year:
+        year_folders = [Path(str(year))]
+        if not year_folders[0].exists():
+            print(f"Error: Year folder {year} does not exist")
+            return
+    else:
+        year_folders = sorted([d for d in Path(".").iterdir() 
+                              if d.is_dir() and d.name.isdigit()])
+    
+    found_animations = []
+    
+    for year_folder in year_folders:
+        year_num = int(year_folder.name)
+        day_folders = sorted([d for d in year_folder.iterdir() 
+                            if d.is_dir() and d.name.startswith("day")])
+        
+        for folder in day_folders:
+            animation_file = folder / "animate.py"
+            if animation_file.exists():
+                day_num = int(folder.name[3:])
+                found_animations.append((year_num, day_num))
+    
+    if not found_animations:
+        print("No animations found")
+        return
+    
+    print(f"\nFound {len(found_animations)} animation(s):\n")
+    current_year = None
+    for year_num, day_num in found_animations:
+        if year_num != current_year:
+            if current_year is not None:
+                print()
+            print(f"Year {year_num}:")
+            current_year = year_num
+        print(f"  Day {day_num:02d}: {year_num}/day{day_num:02d}/animate.py")
+
+
 def get_current_day():
     """Get the current AOC day (1-25) if we're in December."""
     now = datetime.now()
@@ -291,9 +362,17 @@ Examples:
     %(prog)s run --all                      # Run all solutions (all years)
     %(prog)s run --all --year 2023          # Run all 2023 solutions
 
+  Animation commands:
+    %(prog)s animate                        # Run today's animation
+    %(prog)s animate --day 5                # Run animation for day 5
+    %(prog)s animate --year 2023 --day 5    # Run animation for 2023 day 5
+    %(prog)s list                           # List all available animations
+    %(prog)s list --year 2023               # List animations for 2023
+
 Folder structure:
   2024/day01/solution.py
   2024/day01/data
+  2024/day01/animate.py
   2024/day02/solution.py
   2023/day01/solution.py
   ...
@@ -347,6 +426,30 @@ Folder structure:
         help="Run all available solutions (optionally filter by --year)"
     )
     
+    # Animate command
+    animate_parser = subparsers.add_parser("animate", help="Run animation for a day")
+    animate_parser.add_argument(
+        "--day",
+        type=int,
+        default=get_current_day(),
+        help="Day to animate (default: today or 1)"
+    )
+    animate_parser.add_argument(
+        "--year",
+        type=int,
+        default=get_current_year(),
+        help=f"Year to animate (default: current year in December, otherwise {DEFAULT_YEAR})"
+    )
+    
+    # List command
+    list_parser = subparsers.add_parser("list", help="List available animations")
+    list_parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Filter by year (default: all years)"
+    )
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -371,6 +474,12 @@ Folder structure:
             run_all_solutions(year_filter)
         else:
             run_solution(args.year, args.day)
+    
+    elif args.command == "animate":
+        run_animation(args.year, args.day)
+    
+    elif args.command == "list":
+        list_animations(args.year)
 
 
 if __name__ == "__main__":
