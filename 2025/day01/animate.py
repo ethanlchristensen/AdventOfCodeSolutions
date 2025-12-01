@@ -281,7 +281,6 @@ class AdventOfCodeDay01Effect(BaseEffect):
                     self.buffer.put_char(x, y, colored)
 
     def _trigger_zeros_flash(self):
-        """Trigger the colorful flash effect for the zeros counter"""
         self.zeros_flash_frames_remaining = self.zeros_flash_duration
 
     def get_zero_count_image(self):
@@ -386,7 +385,7 @@ class AdventOfCodeDay01Effect(BaseEffect):
             row = int(self.zeros_y_position) + y
             if 0 <= row < self.buffer.height():
                 self.buffer.put_at_center(row, line)
-                
+
     def place_current_position_with_neighbors(self):
         center_y = self.buffer.height() // 2
         center_x = self.buffer.width() // 2
