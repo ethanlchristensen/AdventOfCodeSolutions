@@ -40,7 +40,7 @@ class Solution:
         """Solve part 2 of the puzzle."""
         total = 0
         banks = [[int(c) for c in line] for line in self.data.split("\n")]
-        for i, bank in enumerate(banks):
+        for bank in banks:
             largest = self.find_largest_joltage(bank, 12)
             total += largest
         return total
