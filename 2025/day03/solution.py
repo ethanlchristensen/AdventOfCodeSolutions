@@ -2,8 +2,6 @@
 Advent of Code 2025 - Day 3
 """
 
-from itertools import combinations
-
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
