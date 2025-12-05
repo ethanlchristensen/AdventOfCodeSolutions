@@ -33,34 +33,34 @@ trio = ["trio (>=0.31.0)"]
 
 [[package]]
 name = "bruhanimate"
-version = "0.2.93"
+version = "0.2.96"
 description = "ASCII Termnial Animation Package"
 optional = false
-python-versions = "<4.0,>=3.11"
+python-versions = "<4.0,>=3.13"
 groups = ["main"]
 files = [
-    {file = "bruhanimate-0.2.93-py3-none-any.whl", hash = "sha256:5adc15232205aa62f6025006e70fe58b68de98e7b80b6dfe6b97fd76c39616da"},
-    {file = "bruhanimate-0.2.93.tar.gz", hash = "sha256:89ea1832464b520effc17aaebd9868650049745ab9e3008cc6c578c401a27c78"},
+    {file = "bruhanimate-0.2.96-py3-none-any.whl", hash = "sha256:217f7ba47452cb3adaac951a7d2ede02086feb8513aa24840b26f2abb7425ed0"},
+    {file = "bruhanimate-0.2.96.tar.gz", hash = "sha256:77f7b041a957fdb86e03fa2b9a9ad22133f343a915d730c2f11e54d750a85c22"},
 ]
 
 [package.dependencies]
-bruhcolor = "*"
-future = "*"
-numpy = "*"
-openai = "*"
-pyfiglet = "*"
-requests = "*"
+bruhcolor = ">=0.0.64,<0.0.65"
+future = ">=1.0.0,<2.0.0"
+numpy = ">=2.3.4,<3.0.0"
+openai = ">=2.6.1,<3.0.0"
+pyfiglet = ">=1.0.4,<2.0.0"
+pywin32 = {version = ">=311,<312", markers = "sys_platform == \"win32\""}
+requests = ">=2.32.5,<3.0.0"
 
 [[package]]
 name = "bruhcolor"
-version = "0.0.65"
-description = "256-color terminal text formatter"
+version = "0.0.64"
+description = "256 Color Terminal Text Formatter"
 optional = false
-python-versions = "<4.0,>=3.8"
+python-versions = "*"
 groups = ["main"]
 files = [
-    {file = "bruhcolor-0.0.65-py3-none-any.whl", hash = "sha256:481aaaf12660a5a4439deb17e1fb4b7a7cb57716bc3701c0564e1806408c1098"},
-    {file = "bruhcolor-0.0.65.tar.gz", hash = "sha256:806cbdf53804f52a07c663bd8f384bc65866553f48e14c16972fab393dd1092a"},
+    {file = "bruhcolor-0.0.64.tar.gz", hash = "sha256:9e01b76c24705543e34bff870debfaadc0342ce4538a56a7757d06f4ca06f3dc"},
 ]
 
 [[package]]
@@ -889,4 +889,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<4.0"
-content-hash = "5ff10e76ebcf8af34d313fe4632cb491d1f960e215d79a939fdb1d4d690873c6"
+content-hash = "05aaa4cdc1232da4a58e90556d9c076bf8883ef19675eb19b8d8bd4919082250"
