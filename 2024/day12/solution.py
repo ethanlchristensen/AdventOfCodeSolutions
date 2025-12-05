@@ -12,11 +12,10 @@ from scipy.spatial import ConvexHull
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
-    
+
     def load_data(self, name="data"):
         with open(name, "r") as file:
             return [list(line.strip()) for line in file.readlines()]
-
 
     def part1(self):
         """Code to solve part one"""
@@ -26,10 +25,10 @@ class Solution:
         datastr = "".join([c for row in self.data for c in row])
 
         crops = {crop: datastr.count(crop) for crop in set(datastr)}
-        crop_seen_plots = {crop:set() for crop in crops}
-        crop_perimeters = {crop:{} for crop in crops}
-        crop_region_totals = {crop:{} for crop in crops}
-    
+        crop_seen_plots = {crop: set() for crop in crops}
+        crop_perimeters = {crop: {} for crop in crops}
+        crop_region_totals = {crop: {} for crop in crops}
+
         directions = [
             (1, 0),
             (0, 1),
@@ -57,7 +56,9 @@ class Solution:
 
             plot_hits = 0
             for direction in directions:
-                plot_hits += check_dir(crop, (x + direction[0], y + direction[1]), crop_region)
+                plot_hits += check_dir(
+                    crop, (x + direction[0], y + direction[1]), crop_region
+                )
             return plot_hits + 1
 
         for crop, crop_count in crops.items():
@@ -71,7 +72,8 @@ class Solution:
                 crop_start_point = None
                 for y in range(len(self.data)):
                     for x in range(len(self.data[0])):
-                        if (x, y) in crop_seen_plots[crop]: continue
+                        if (x, y) in crop_seen_plots[crop]:
+                            continue
                         if self.data[y][x] == crop:
                             crop_start_point = (x, y)
                             break
@@ -82,7 +84,7 @@ class Solution:
                 crops_found += region_crops
                 crop_region_totals[crop][crop_region] = region_crops
                 crop_region += 1
-    
+
         total = 0
 
         for crop in crop_region_totals:
@@ -94,7 +96,6 @@ class Solution:
         end = time.time()
         return total, end - start
 
-
     def part2(self):
         """Code to solve part two"""
         start = time.time()
@@ -103,12 +104,12 @@ class Solution:
         datastr = "".join([c for row in self.data for c in row])
 
         crops = {crop: datastr.count(crop) for crop in set(datastr)}
-        crop_seen_plots = {crop:set() for crop in crops}
-        crop_perimeters = {crop:{} for crop in crops}
-        crop_region_sides = {crop:{} for crop in crops}
-        crop_region_totals = {crop:{} for crop in crops}
-        crop_region_plots = {crop:{} for crop in crops}
-    
+        crop_seen_plots = {crop: set() for crop in crops}
+        crop_perimeters = {crop: {} for crop in crops}
+        crop_region_sides = {crop: {} for crop in crops}
+        crop_region_totals = {crop: {} for crop in crops}
+        crop_region_plots = {crop: {} for crop in crops}
+
         directions = [
             (1, 0),
             (0, 1),
@@ -132,7 +133,9 @@ class Solution:
 
             plot_hits = 0
             for direction in directions:
-                plot_hits += check_dir(crop, (x + direction[0], y + direction[1]), crop_region)
+                plot_hits += check_dir(
+                    crop, (x + direction[0], y + direction[1]), crop_region
+                )
             return plot_hits + 1
 
         for crop, crop_count in crops.items():
@@ -148,7 +151,8 @@ class Solution:
                 crop_start_point = None
                 for y in range(len(self.data)):
                     for x in range(len(self.data[0])):
-                        if (x, y) in crop_seen_plots[crop]: continue
+                        if (x, y) in crop_seen_plots[crop]:
+                            continue
                         if self.data[y][x] == crop:
                             crop_start_point = (x, y)
                             break
@@ -159,13 +163,13 @@ class Solution:
                 crops_found += region_crops
                 crop_region_totals[crop][crop_region] = region_crops
                 crop_region += 1
-    
+
         total = 0
 
         for target in crop_seen_plots:
             target_points = crop_seen_plots[target].copy()
             for x, y in crop_seen_plots[target]:
-                target_points.add((x+1,y))
+                target_points.add((x + 1, y))
             if len(target_points) == 2:
                 bx, by = list(crop_seen_plots[target])[0]
                 target_points.add((bx + 2, by))
@@ -176,14 +180,12 @@ class Solution:
         end = time.time()
         return total, end - start
 
-
-
     def get_sides(self, points):
         from shapely.geometry import Polygon
+
         polygon = Polygon(points)
         num_sides = len(polygon.exterior.coords) - 1
         return num_sides
-
 
     def solve(self):
         """Run solutions for part one and two"""
@@ -200,8 +202,6 @@ class Solution:
             print(
                 f"part two: {part_two_answer}\npart two time: {part_two_time_to_complete:.4f}s"
             )
-
-
 
 
 if __name__ == "__main__":

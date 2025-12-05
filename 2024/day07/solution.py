@@ -12,14 +12,13 @@ import itertools
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
-    
+
     def load_data(self, name="data"):
         with open(name, "r") as file:
             return [
                 [int(v) for v in line.replace(":", "").split(" ")]
                 for line in file.readlines()
             ]
-
 
     def part1(self):
         """Code to solve part one"""
@@ -43,7 +42,6 @@ class Solution:
                     break
 
         return total
-
 
     def part2(self):
         """Code to solve part two"""
@@ -70,15 +68,11 @@ class Solution:
                     break
         return total
 
-
-
     def get_all_operations_1(self, n):
         return list(itertools.product((0, 1), repeat=n))
 
-
     def get_all_operations_2(self, n):
         return list(itertools.product((0, 1, 2), repeat=n))
-
 
     def solve(self):
         """Run solutions for part one and two"""
@@ -91,8 +85,6 @@ class Solution:
 
         if part_two_answer:
             print(f"part two: {part_two_answer}")
-
-
 
 
 if __name__ == "__main__":

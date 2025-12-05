@@ -10,12 +10,13 @@ from bruhanimate import (
     TwinkleEffect,
     SnowEffect,
     FireworkEffect,
-    text_to_image
+    text_to_image,
 )
 
 # DECAY_VALUES = [17, 18, 19, 20, 21]
 DECAY_VALUES = list(range(232, 255))
 # DECAY_VALUES = [val for val in DECAY_VALUES for _ in range(3)]
+
 
 class Decay:
     def __init__(
@@ -38,6 +39,7 @@ class Decay:
 
     def get_colored_tile(self):
         return bc(text=self.char, color=self.values[self.life]).colored
+
 
 class AdventOfCodeDay18Effect(BaseEffect):
     def __init__(
@@ -70,10 +72,14 @@ class AdventOfCodeDay18Effect(BaseEffect):
                         .replace(".", "  ")
                         .replace("@", "@ ")
                     )
-            data = [list(line.strip().replace(".", " ")) for line in lines if line.strip() != ""]
+            data = [
+                list(line.strip().replace(".", " "))
+                for line in lines
+                if line.strip() != ""
+            ]
             if self.data_file == "datasmall4":
                 self.board = data[:-1]
-                self.moves = data[-1][:len(data[-1])//4]
+                self.moves = data[-1][: len(data[-1]) // 4]
             else:
                 self.board = data[:-1]
                 self.moves = data[-1]
@@ -138,7 +144,9 @@ class AdventOfCodeDay18Effect(BaseEffect):
         move_image = text_to_image(text=move)
         self.processed_move_images.append(move_image)
         for y in range(len(move_image)):
-            self.buffer.put_at_center(y=self.buffer.height() - len(move_image) + y, text=move_image[y])
+            self.buffer.put_at_center(
+                y=self.buffer.height() - len(move_image) + y, text=move_image[y]
+            )
 
         robot_position = self.get_robot_position()
         can_move = True
@@ -199,6 +207,7 @@ class AdventOfCodeDay18Effect(BaseEffect):
                 full_digit_rows[y] += digit[y]
         for idx, row in enumerate(full_digit_rows):
             self.buffer.put_at_center(y=idx, text=row)
+
 
 def animate(screen: Screen):
     renderer = EffectRenderer(

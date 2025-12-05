@@ -1,8 +1,10 @@
 import sys
+
 sys.setrecursionlimit(100000000)
 memo = {}
-coins = [1,2,5]
+coins = [1, 2, 5]
 amount = 11
+
 
 def find_coins(coins, value):
     if value not in memo:
@@ -14,6 +16,7 @@ def find_coins(coins, value):
                 total += find_coins(coins, value - coin)
             memo[value] = total
     return memo[value]
+
 
 total = find_coins(coins, amount)
 print(total)

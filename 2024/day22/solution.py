@@ -14,11 +14,12 @@ import warnings
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
-    
-    def load_data(self, name='data'):
-        with open(name, 'r') as file:
-            return [int(line.strip()) for line in file.readlines() if line.strip() != ""]
 
+    def load_data(self, name="data"):
+        with open(name, "r") as file:
+            return [
+                int(line.strip()) for line in file.readlines() if line.strip() != ""
+            ]
 
     def part1(self):
         """Code to solve part one"""
@@ -34,8 +35,7 @@ class Solution:
         end = time.time()
         return total, end - start
 
-
-    def part2(self): 
+    def part2(self):
         """Code to solve part two"""
         start = time.time()
 
@@ -46,15 +46,20 @@ class Solution:
 
         buyer_secrets = [self.get_secrets(secret) for secret in self.data]
         buyer_prices = [self.get_prices(price) for price in buyer_secrets]
-        buyer_price_changes = [self.get_price_changes(prices) for prices in buyer_prices]
-        buyer_price_change_sequences = {idx:{} for idx in range(len(buyer_price_changes))}
+        buyer_price_changes = [
+            self.get_price_changes(prices) for prices in buyer_prices
+        ]
+        buyer_price_change_sequences = {
+            idx: {} for idx in range(len(buyer_price_changes))
+        }
         for idx, buyer_price_change in enumerate(buyer_price_changes):
             for jdx in range(len(buyer_price_change) - 3):
-                sequence = tuple(buyer_price_change[jdx:jdx+4])
+                sequence = tuple(buyer_price_change[jdx : jdx + 4])
                 if sequence not in buyer_price_change_sequences[idx]:
-                    buyer_price_change_sequences[idx][sequence] = buyer_prices[idx][jdx+4]
+                    buyer_price_change_sequences[idx][sequence] = buyer_prices[idx][
+                        jdx + 4
+                    ]
 
-    
         unique_sequences = set()
         for k, v in buyer_price_change_sequences.items():
             for kk, vv in v.items():
@@ -66,8 +71,11 @@ class Solution:
         df["C"] = [v[2] for v in unique_sequences]
         df["D"] = [v[3] for v in unique_sequences]
         for buyer in range(len(self.data)):
-            df[f"buyer_{buyer}"] = [buyer_price_change_sequences[buyer].get(unique_sequences[idx], 0) for idx in range(len(unique_sequences))]
-        df["totals"] = df.loc[:, 'buyer_0':'buyer_2390'].sum(axis=1)
+            df[f"buyer_{buyer}"] = [
+                buyer_price_change_sequences[buyer].get(unique_sequences[idx], 0)
+                for idx in range(len(unique_sequences))
+            ]
+        df["totals"] = df.loc[:, "buyer_0":"buyer_2390"].sum(axis=1)
         best_total = df["totals"].max()
 
         # total = 19 * 19 * 19 * 19
@@ -89,15 +97,12 @@ class Solution:
         end = time.time()
         return best_total, end - start
 
-
     def prune(self, value):
         return value % 16777216
-
 
     def mix(self, value, secret):
         value = value ^ secret
         return value
-
 
     def get_secrets(self, starting_secret, steps=2000):
         secrets = [starting_secret]
@@ -108,38 +113,37 @@ class Solution:
             secrets.append(starting_secret)
         return secrets
 
-
     def get_prices(self, secrets):
         return [secret % 10 for secret in secrets]
-
 
     def get_price_changes(self, prices):
         return [prices[idx + 1] - prices[idx] for idx in range(len(prices) - 1)]
 
-
     def find_pattern(self, values, pattern):
         if len(values) < len(pattern):
             return -1, -1
-        
-        for i in range(len(values) - len(pattern) + 1):
-            if values[i:i+len(pattern)] == pattern:
-                return i, (i + len(pattern))
-    
-        return -1, -1
 
+        for i in range(len(values) - len(pattern) + 1):
+            if values[i : i + len(pattern)] == pattern:
+                return i, (i + len(pattern))
+
+        return -1, -1
 
     def solve(self):
         """Run solutions for part one and two"""
         part_one_answer, part_one_time_to_complete = self.part1()
 
         if part_one_answer:
-            print(f"part one: {part_one_answer}\npart one time: {part_one_time_to_complete:.4f}s")
+            print(
+                f"part one: {part_one_answer}\npart one time: {part_one_time_to_complete:.4f}s"
+            )
 
         part_two_answer, part_two_time_to_complete = self.part2()
-    
-        if part_two_answer:
-            print(f"part two: {part_two_answer}\npart two time: {part_two_time_to_complete:.4f}s")
 
+        if part_two_answer:
+            print(
+                f"part two: {part_two_answer}\npart two time: {part_two_time_to_complete:.4f}s"
+            )
 
 
 if __name__ == "__main__":

@@ -14,9 +14,9 @@ from bruhcolor import bruhcolored as bc
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
-    
-    def load_data(self, name='data'):
-        with open(name, 'r') as file:
+
+    def load_data(self, name="data"):
+        with open(name, "r") as file:
             self.data = []
             for line in file.readlines():
                 match = re.search(r"p=(.*)\sv=(.*)", line)
@@ -31,23 +31,30 @@ class Solution:
             self.position = position
             self.velocity = velocity
             self.bounds = bounds
-    
+
         def move(self):
             self.previous_position = (self.position[0], self.position[1])
-            dx, dy = self.position[0] + self.velocity[0], self.position[1] +  self.velocity[1]
+            dx, dy = (
+                self.position[0] + self.velocity[0],
+                self.position[1] + self.velocity[1],
+            )
             if not -self.bounds[0] < dx < self.bounds[0]:
-                if dx < 0: dx += self.bounds[0]
-                else: dx -= self.bounds[0]
+                if dx < 0:
+                    dx += self.bounds[0]
+                else:
+                    dx -= self.bounds[0]
             if not -self.bounds[1] < dy < self.bounds[1]:
-                if dy < 0: dy += self.bounds[1]
-                else: dy -= self.bounds[1]
+                if dy < 0:
+                    dy += self.bounds[1]
+                else:
+                    dy -= self.bounds[1]
             self.position = (dx, dy)
 
         def __str__(self):
             return f"Robot(position={self.position}, velocity={self.velocity})"
+
         def __repr__(self):
             return f"Robot(position={self.position}, velocity={self.velocity})"
-
 
     def part1(self):
         """Code to solve part one"""
@@ -57,13 +64,16 @@ class Solution:
         self.data = self.load_data()
         width, height = 101, 103
         quadrants = self.get_quadrant_ranges(width, height)
-        robots = [Robot(position, velocity, (width, height)) for position, velocity in self.data]
+        robots = [
+            Robot(position, velocity, (width, height))
+            for position, velocity in self.data
+        ]
         tile_board = [[0 for _ in range(width)] for _ in range(height)]
 
         for robot in robots:
             x, y = robot.position
             tile_board[y][x] += 1
-    
+
         # self.print_board(tile_board)
         for _ in range(1, 101):
             for robot in robots:
@@ -80,8 +90,7 @@ class Solution:
         end = time.time()
         return total, end - start
 
-
-    def part2(self): 
+    def part2(self):
         """Code to solve part two"""
         start = time.time()
 
@@ -90,7 +99,10 @@ class Solution:
         width, height = 101, 103
         mid_width, mid_height = width // 2, height // 2
         quadrants = self.get_quadrant_ranges(width, height)
-        robots = [Robot(position, velocity, (width, height)) for position, velocity in self.data]
+        robots = [
+            Robot(position, velocity, (width, height))
+            for position, velocity in self.data
+        ]
         tile_board = [[0 for _ in range(width)] for _ in range(height)]
 
         for robot in robots:
@@ -98,18 +110,14 @@ class Solution:
             tile_board[y][x] += 1
 
         quadrant_averages = {
-            idx: {
-                "count": 0,
-                "average": 0
-            }
-            for idx in range(len(quadrants))
+            idx: {"count": 0, "average": 0} for idx in range(len(quadrants))
         }
-    
+
         df = pd.DataFrame()
         df["second"] = []
         for idx in range(len(quadrants)):
             df[idx] = []
-    
+
         data_frame_data = []
 
         # self.print_board(tile_board)
@@ -122,7 +130,8 @@ class Solution:
                 tile_board[py][px] -= 1
             if _ > 6750:
                 self.print_board(tile_board)
-            if _ == 6771: break
+            if _ == 6771:
+                break
         #     quadrant_values = [self.get_quadrant_count(q, tile_board) for q in quadrants]
         #     data_frame_data.append([_] + quadrant_values)
         # for quadrant in quadrants:
@@ -134,14 +143,16 @@ class Solution:
         end = time.time()
         return total, end - start
 
-
     def print_board(self, board, sleep=0.25):
         os.system("cls")
         for row in board:
-            print("".join([bc(text=" ", on_color=255).colored if v != 0 else " " for v in row]))
+            print(
+                "".join(
+                    [bc(text=" ", on_color=255).colored if v != 0 else " " for v in row]
+                )
+            )
         print()
         time.sleep(sleep)
-
 
     def get_quadrant_ranges(self, width, height):
         mid_width, mid_height = width // 2, height // 2
@@ -152,26 +163,27 @@ class Solution:
             ((mid_width + 1, width), (mid_height + 1, height)),
         ]
 
-
     def get_quadrant_count(self, ranges, board):
         total = 0
         for y in range(ranges[1][0], ranges[1][1]):
-            total += sum(board[y][ranges[0][0]:ranges[0][1]])
+            total += sum(board[y][ranges[0][0] : ranges[0][1]])
         return total
-
 
     def solve(self):
         """Run solutions for part one and two"""
         part_one_answer, part_one_time_to_complete = self.part1()
 
         if part_one_answer:
-            print(f"part one: {part_one_answer}\npart one time: {part_one_time_to_complete:.4f}s")
+            print(
+                f"part one: {part_one_answer}\npart one time: {part_one_time_to_complete:.4f}s"
+            )
 
         part_two_answer, part_two_time_to_complete = self.part2()
-    
-        if part_two_answer:
-            print(f"part two: {part_two_answer}\npart two time: {part_two_time_to_complete:.4f}s")
 
+        if part_two_answer:
+            print(
+                f"part two: {part_two_answer}\npart two time: {part_two_time_to_complete:.4f}s"
+            )
 
 
 if __name__ == "__main__":

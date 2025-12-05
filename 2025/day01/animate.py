@@ -28,7 +28,11 @@ class AdventOfCodeDay01Effect(BaseEffect):
         part: str = "one",
         data_file: str = "data",
         effect_halt: int = 10,
-        second_effect: FireworkEffect | StarEffect | SnowEffect | PlasmaEffect | None = None,
+        second_effect: FireworkEffect
+        | StarEffect
+        | SnowEffect
+        | PlasmaEffect
+        | None = None,
         second_effect_halt: int = 1,
         min_transition_frames: int = 2,
         max_transition_frames: int = 20,
@@ -51,7 +55,7 @@ class AdventOfCodeDay01Effect(BaseEffect):
         self.blur_threshold = blur_threshold
         self.instruction_pause_frames = instruction_pause_frames
         self.show_lines = show_lines
-        self.exit_rotation_speed =exit_rotation_speed
+        self.exit_rotation_speed = exit_rotation_speed
         self.line_char = "|"
         self.number_images = [
             [[c for c in row] for row in text_to_image(str(i), font="doom")]
@@ -169,14 +173,16 @@ class AdventOfCodeDay01Effect(BaseEffect):
 
         target = self.target_position
         distance_to_zero = min(target, 100 - target)
-        
+
         proximity_threshold = 5
         if distance_to_zero < proximity_threshold:
             proximity_factor = distance_to_zero / proximity_threshold
-            proximity_slowdown = int(self.max_transition_frames * (1 - proximity_factor * 0.7))
-            
+            proximity_slowdown = int(
+                self.max_transition_frames * (1 - proximity_factor * 0.7)
+            )
+
             return max(base_frames, proximity_slowdown)
-        
+
         return base_frames
 
     def _place_neighbor_image(
@@ -224,42 +230,42 @@ class AdventOfCodeDay01Effect(BaseEffect):
             if line_start < line_end:
                 clipped_line = line[line_start:line_end]
                 self.buffer.put_at(buffer_col, row, clipped_line)
-    
+
     def _draw_line(self, x1: int, y1: int, x2: int, y2: int, char: str = None):
         if char is None:
             char = self.line_char
-        
+
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)
-        
+
         sx = 1 if x1 < x2 else -1
         sy = 1 if y1 < y2 else -1
-        
+
         err = dx - dy
-        
+
         x, y = x1, y1
-        
+
         while True:
             if 0 <= x < self.buffer.width() and 0 <= y < self.buffer.height():
                 if abs(dx) > abs(dy):
-                    line_char = '─'
+                    line_char = "─"
                 elif abs(dy) > abs(dx):
-                    line_char = '│'
+                    line_char = "│"
                 else:
-                    line_char = '/' if (sx * sy) > 0 else '\\'
-                
+                    line_char = "/" if (sx * sy) > 0 else "\\"
+
                 colored = bruhcolored(line_char, 240).colored
                 self.buffer.put_char(x, y, colored)
-            
+
             if x == x2 and y == y2:
                 break
-            
+
             e2 = 2 * err
-            
+
             if e2 > -dy:
                 err -= dy
                 x += sx
-            
+
             if e2 < dx:
                 err += dx
                 y += sy
@@ -270,9 +276,9 @@ class AdventOfCodeDay01Effect(BaseEffect):
     def _render_flash(self):
         if self.flash_frames_remaining <= 0:
             return
-        
+
         intensity = self.flash_frames_remaining / self.flash_duration
-        
+
         flash_char = "."
         for y in range(self.buffer.height()):
             for x in range(self.buffer.width()):
@@ -285,7 +291,7 @@ class AdventOfCodeDay01Effect(BaseEffect):
 
     def get_zero_count_image(self):
         image = text_to_image(str(self.zeros), font="doom")
-        
+
         if self.zeros_flash_frames_remaining > 0:
             colored_image = []
             for y, row in enumerate(image):
@@ -293,17 +299,22 @@ class AdventOfCodeDay01Effect(BaseEffect):
                 for x, char in enumerate(row):
                     if char.strip():
                         color_index = (x + y) % len(self.zeros_flash_colors)
-                        color_offset = (self.zeros_flash_duration - self.zeros_flash_frames_remaining) // 3
-                        final_color_index = (color_index + color_offset) % len(self.zeros_flash_colors)
+                        color_offset = (
+                            self.zeros_flash_duration
+                            - self.zeros_flash_frames_remaining
+                        ) // 3
+                        final_color_index = (color_index + color_offset) % len(
+                            self.zeros_flash_colors
+                        )
                         color = self.zeros_flash_colors[final_color_index]
                         colored_row.append(bruhcolored(char, color).colored)
                     else:
                         colored_row.append(char)
                 colored_image.append(colored_row)
             return colored_image
-        
+
         return image
-    
+
     def get_current_position_image(self, position):
         if 0 <= position < 100:
             image = self.number_images[position]
@@ -319,9 +330,12 @@ class AdventOfCodeDay01Effect(BaseEffect):
         else:
             pos = position % 100
             return self.number_images[pos]
-    
+
     def get_current_instruction_image(self):
-        return text_to_image(f"{self.current_instruction_direction} {self.current_instruction_clicks_remaining}", font="doom")
+        return text_to_image(
+            f"{self.current_instruction_direction} {self.current_instruction_clicks_remaining}",
+            font="doom",
+        )
 
     def place_instruction_image(self):
         image = self.get_current_instruction_image()
@@ -331,56 +345,60 @@ class AdventOfCodeDay01Effect(BaseEffect):
     def draw_lines_to_numbers(self):
         if not self.show_lines:
             return
-        
+
         center_y = self.buffer.height() // 2
         center_x = self.buffer.width() // 2
         bottom_y = self.buffer.height() - 1
         bottom_x = center_x
-        
+
         horizontal_spacing = 15
-        
+
         transition_offset = 0.0
         if self.is_transitioning:
             t = self.transition_progress
             eased_t = t * t * (3.0 - 2.0 * t)
             transition_offset = eased_t * self.transition_direction
-        
+
         for offset in range(-10, 11):
             visual_offset = offset - transition_offset
             pos = (self.position + offset) % 100
-            
+
             abs_offset = abs(visual_offset)
             normalized_offset = abs_offset / self.curve_divisor
-            vertical_offset = int(normalized_offset ** self.curve_exponent * self.curve_max_offset)
-            
+            vertical_offset = int(
+                normalized_offset**self.curve_exponent * self.curve_max_offset
+            )
+
             image = self.number_images[pos]
             image_height = len(image)
             image_width = len(image[0])
-            
+
             number_x = center_x + int(visual_offset * horizontal_spacing)
             number_y = center_y + vertical_offset
-            
+
             if number_x < 0 or number_x >= self.buffer.width():
                 continue
-            
+
             self._draw_line(bottom_x, bottom_y, number_x, number_y)
 
     def place_zeros_counter_image(self):
         image = self.get_zero_count_image()
-        
+
         if self.zeros_y_position is None:
             self.zeros_y_position = self.buffer.height() - len(image)
-        
+
         if self.all_instructions_completed and self.zeros_target_y is None:
             if abs(self.exit_offset) > 12:
                 self.zeros_target_y = (self.buffer.height() - len(image)) // 2
-        
+
         if self.zeros_target_y is not None:
             if abs(self.zeros_y_position - self.zeros_target_y) > 0.5:
-                self.zeros_y_position += (self.zeros_target_y - self.zeros_y_position) * 0.1
+                self.zeros_y_position += (
+                    self.zeros_target_y - self.zeros_y_position
+                ) * 0.1
             else:
                 self.zeros_y_position = self.zeros_target_y
-        
+
         for y, line in enumerate(image):
             row = int(self.zeros_y_position) + y
             if 0 <= row < self.buffer.height():
@@ -487,7 +505,7 @@ class AdventOfCodeDay01Effect(BaseEffect):
 
         if self.all_instructions_completed:
             self.exit_offset += self.exit_direction * 0.5
-            
+
             self._render_flash()
             self.draw_lines_to_numbers()
             self.place_current_position_with_neighbors()
@@ -569,6 +587,7 @@ class AdventOfCodeDay01Effect(BaseEffect):
         self.place_zeros_counter_image()
         self.place_instruction_image()
 
+
 def animate(screen):
     renderer = EffectRenderer(
         screen=screen,
@@ -580,7 +599,9 @@ def animate(screen):
     )
 
     fireworks = FireworkEffect(Buffer(screen.height, screen.width), " ")
-    fireworks.set_second_effect(second_effect=TwinkleEffect(Buffer(screen.height, screen.width), " "))
+    fireworks.set_second_effect(
+        second_effect=TwinkleEffect(Buffer(screen.height, screen.width), " ")
+    )
     fireworks.set_firework_type("random")
     fireworks.set_firework_color_enabled(True)
     fireworks.set_firework_color_type("twotone")
@@ -604,7 +625,7 @@ def animate(screen):
         blur_threshold=3,
         instruction_pause_frames=20,
         show_lines=False,
-        exit_rotation_speed=2
+        exit_rotation_speed=2,
     )
 
     renderer.run()

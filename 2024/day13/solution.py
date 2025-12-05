@@ -15,7 +15,7 @@ from z3 import Ints, solve as s, And, RealVal
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
-    
+
     def load_data(self, name="data", part=1):
         with open(name, "r") as file:
             puzzles = []
@@ -29,7 +29,9 @@ class Solution:
                         if part == 1:
                             puzzle.append([int(v) for v in match.groups()])
                         elif part == 2:
-                            puzzle.append([int(v) + 10000000000000 for v in match.groups()])
+                            puzzle.append(
+                                [int(v) + 10000000000000 for v in match.groups()]
+                            )
                 else:
                     if line != "":
                         if match := re.match(r"Button B: X\+(\d+),\sY\+(\d+)", line):
@@ -39,8 +41,6 @@ class Solution:
                         puzzle = []
             puzzles.append(puzzle)
             return puzzles
-
-
 
     def part1(self):
         """Code to solve part one"""
@@ -66,8 +66,6 @@ class Solution:
 
         end = time.time()
         return total, end - start
-
-
 
     def part2(self):
         """Code to solve part two"""
@@ -112,8 +110,6 @@ class Solution:
         end = time.time()
         return total, end - start
 
-
-
     def solve(self):
         """Run solutions for part one and two"""
         part_one_answer, part_one_time_to_complete = self.part1()
@@ -129,8 +125,6 @@ class Solution:
             print(
                 f"part two: {part_two_answer}\npart two time: {part_two_time_to_complete:.4f}s"
             )
-
-
 
 
 if __name__ == "__main__":

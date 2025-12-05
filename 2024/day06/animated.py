@@ -22,6 +22,7 @@ class X:
             235: 232,
             232: 232,
         }
+
     def next_v(self):
         if self.active:
             self.v = self.vm[self.v]
@@ -29,11 +30,12 @@ class X:
                 self.active = False
 
 
-def load_data(name='datasmall'):
-    file = open(name, 'r')
+def load_data(name="datasmall"):
+    file = open(name, "r")
     data = [[c for c in line.strip()] for line in file.readlines()]
     file.close()
     return data
+
 
 def get_direction(char: str):
     if char == "^":
@@ -45,6 +47,7 @@ def get_direction(char: str):
     if char == "v":
         return [0, 1]
 
+
 def get_next_guard(current_guard):
     if current_guard == "^":
         return ">"
@@ -55,14 +58,15 @@ def get_next_guard(current_guard):
     if current_guard == "<":
         return "^"
 
+
 def get_next_position(position, data, xs):
     current_guard = data[position[1]][position[0]]
     direction = get_direction(data[position[1]][position[0]])
     new_position = (position[0] + direction[0], position[1] + direction[1])
     if not 0 <= new_position[0] < len(data[0]) or not 0 <= new_position[1] < len(data):
-            xs.append(X(x=position[0], y=position[1], v=255, c=current_guard))
-            data[position[1]][position[0]] = "X"
-            return None, data, xs
+        xs.append(X(x=position[0], y=position[1], v=255, c=current_guard))
+        data[position[1]][position[0]] = "X"
+        return None, data, xs
     if data[new_position[1]][new_position[0]] in ["#", "0"]:
         next_guard = get_next_guard(current_guard)
         data[position[1]][position[0]] = next_guard
@@ -73,11 +77,13 @@ def get_next_position(position, data, xs):
         data[new_position[1]][new_position[0]] = current_guard
         return new_position, data, xs
 
+
 def get_starting_guard_position(data):
     for y in range(len(data)):
         for x in range(len(data[0])):
             if data[y][x] == "^":
                 return (x, y)
+
 
 def run(screen: Screen):
     """
@@ -96,24 +102,41 @@ def run(screen: Screen):
             for y in range(len(data)):
                 for x in range(len(data[0])):
                     screen.print_at(data[y][x], x, y, 1)
-            this_data = [[data[j][i] for i in range(len(data[0]))] for j in range(len(data))]
+            this_data = [
+                [data[j][i] for i in range(len(data[0]))] for j in range(len(data))
+            ]
             this_data[ydx][xdx] = "0"
             screen.print_at(x=xdx, y=ydx, text=bruhcolored("0", 27).colored, width=1)
             new_position = guard_position
             new_data = this_data
             while True:
-                new_position, new_data, new_xs = get_next_position(position=new_position, data=new_data, xs=xs)
+                new_position, new_data, new_xs = get_next_position(
+                    position=new_position, data=new_data, xs=xs
+                )
                 if new_position == None:
                     break
                 for erm in new_xs:
-                    screen.print_at(x=erm.x, y=erm.y, text=bruhcolored(text=erm.c, color=erm.v).colored, width=1)
+                    screen.print_at(
+                        x=erm.x,
+                        y=erm.y,
+                        text=bruhcolored(text=erm.c, color=erm.v).colored,
+                        width=1,
+                    )
                     erm.next_v()
                     if not erm.active:
                         screen.print_at(x=erm.x, y=erm.y, text=" ", width=1)
                 new_xs = [erm for erm in new_xs if erm.active]
-                screen.print_at(x=new_position[0], y=new_position[1], text=bruhcolored(text=new_data[new_position[1]][new_position[0]], color=220).colored, width=1)
+                screen.print_at(
+                    x=new_position[0],
+                    y=new_position[1],
+                    text=bruhcolored(
+                        text=new_data[new_position[1]][new_position[0]], color=220
+                    ).colored,
+                    width=1,
+                )
                 time.sleep(0.02)
     input()
 
+
 if __name__ == "__main__":
-   Screen.show(run)
+    Screen.show(run)

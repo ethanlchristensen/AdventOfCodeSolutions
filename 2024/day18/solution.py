@@ -13,7 +13,7 @@ from bruhanimate import Screen, Buffer
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
-    
+
     def load_data(self, name="data"):
         with open(name, "r") as file:
             return [
@@ -21,14 +21,13 @@ class Solution:
                 for line in file.readlines()
             ]
 
-
-
     def part1(self):
         """Code to solve part one"""
         start = time.time()
         self.data = self.load_data()
         n = 71
         memory = [["." for _ in range(n)] for _ in range(n)]
+
         def bfs(memory, seen, row, col):
             q = deque()
             q.append((row, col, []))
@@ -44,13 +43,12 @@ class Solution:
                             q.append((nx, ny, p + [(nx, ny)]))
                             memory[nx][ny] = "0"
                         pass
+
         for cx, cy in self.data[:1024]:
             memory[cx][cy] = "#"
         total = bfs(memory, set(), 0, 0)
         end = time.time()
         return total, end - start
-
-
 
     def part2(self):
         """Code to solve part two"""
@@ -73,7 +71,8 @@ class Solution:
                             q.append((nx, ny, p + [(nx, ny)]))
                             memory[nx][ny] = "0"
                         pass
-        erm  = [["." for _ in range(n)] for _ in range(n)]
+
+        erm = [["." for _ in range(n)] for _ in range(n)]
         for d in self.data:
             xx, yy = d
             erm[xx][yy] = "#"
@@ -83,8 +82,6 @@ class Solution:
                 break
         end = time.time()
         return total, end - start
-
-
 
     def solve(self):
         """Run solutions for part one and two"""
@@ -101,8 +98,6 @@ class Solution:
             print(
                 f"part two: {part_two_answer}\npart two time: {part_two_time_to_complete:.4f}s"
             )
-
-
 
 
 if __name__ == "__main__":

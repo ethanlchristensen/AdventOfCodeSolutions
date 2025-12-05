@@ -12,11 +12,13 @@ import networkx
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
-    
+
     def load_data(self, filename="data"):
         with open(filename, "r") as file:
-            return [tuple(line.strip().split("-")) for line in file if line.strip() != ""]
-    
+            return [
+                tuple(line.strip().split("-")) for line in file if line.strip() != ""
+            ]
+
     self.data = self.load_data()
     nodes = set()
     edges = set()
@@ -30,18 +32,18 @@ class Solution:
     graph.add_nodes_from(nodes)
     graph.add_edges_from(edges)
 
-
-
     def part1(self):
         start = time.time()
         networks = list(networkx.enumerate_all_cliques(graph))
         triples = [network for network in networks if len(network) == 3]
-        valid_networks = [network for network in triples if any([node.startswith("t") for node in network])]
+        valid_networks = [
+            network
+            for network in triples
+            if any([node.startswith("t") for node in network])
+        ]
         total = len(valid_networks)
         end = time.time()
         return total, end - start
-
-
 
     def part2(self):
         start = time.time()
@@ -50,8 +52,6 @@ class Solution:
         password = ",".join(sorted(largest_network))
         end = time.time()
         return password, end - start
-
-
 
     def solve(self):
         part_one_answer, part_one_time_to_complete = self.part1()
@@ -63,8 +63,6 @@ class Solution:
         print(
             f"part two: {part_two_answer}\npart two time: {part_two_time_to_complete:.4f}s"
         )
-
-
 
 
 if __name__ == "__main__":
