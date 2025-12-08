@@ -74,9 +74,10 @@ class AdventOfCodeDay07Effect(BaseEffect):
         self.splitter_char = "✦"
         self.splitter_left_char = "╝"
         self.splitter_right_char = "╚"
-        self.splitter_normal_color = 196
+        self.splitter_normal_colors = [196, 208, 190, 76, 21, 93]
         self.beam_color = 45
         self.pulse_color = 45
+        self.evergreen_color = 28  # Green color for completed beams
 
         self.all_branches = []
         self.current_branch_index = 0
@@ -100,6 +101,11 @@ class AdventOfCodeDay07Effect(BaseEffect):
         self.erased_virtual_positions = set()
         self.erased_connector_positions = set()
 
+        self.splitter_colors = {}  # Store permanent colors for each splitter
+        self.completed_beam_positions = set()  # Beams that should be evergreen
+        self.completed_path_directions = {}  # Store directions for completed beams
+        self.completed_connector_lines = {}  # Store connector lines for completed beams
+
         self._load_data()
 
     def _load_data(self):
@@ -115,7 +121,12 @@ class AdventOfCodeDay07Effect(BaseEffect):
 
             for y in range(self.board_height):
                 for x in range(self.board_width):
-                    if self.data[y][x] == ".":
+                    if self.data[y][x] == "^":
+                        # Assign permanent color to splitter
+                        self.splitter_colors[(x, y)] = random.choice(
+                            self.splitter_normal_colors
+                        )
+                    elif self.data[y][x] == ".":
                         ui_x = self.px + (self.board_spacing * x)
                         ui_y = y + self.py
                         self.twinkles[(ui_x, ui_y)] = TWINKLE_SPEC(
@@ -308,40 +319,60 @@ class AdventOfCodeDay07Effect(BaseEffect):
                         self.buffer.put_char(step[2], step[1], " ")
                     else:
                         x, y = step[0], step[1]
-                        self.erased_positions.add((x, y))
 
-                        ui_x = self.px + (self.board_spacing * x)
-                        ui_y = y + self.py
-                        if (ui_x, ui_y) in self.twinkles:
-                            self.buffer.put_char(
-                                ui_x, ui_y, self.twinkles[(ui_x, ui_y)].fade.colored
-                            )
-                        else:
-                            self.buffer.put_char(ui_x, ui_y, " ")
+                        # Don't erase if this is a completed beam position
+                        if (x, y) not in self.completed_beam_positions:
+                            self.erased_positions.add((x, y))
 
-                        if (x, y, "left") in self.connector_lines:
-                            splitter_ui_x = self.px + (self.board_spacing * x)
-                            splitter_ui_y = y + self.py
-                            for offset in range(1, self.board_spacing):
-                                connector_x = splitter_ui_x - offset
-                                self.erased_connector_positions.add(
-                                    (connector_x, splitter_ui_y)
+                            ui_x = self.px + (self.board_spacing * x)
+                            ui_y = y + self.py
+                            if (ui_x, ui_y) in self.twinkles:
+                                self.buffer.put_char(
+                                    ui_x, ui_y, self.twinkles[(ui_x, ui_y)].fade.colored
                                 )
-                                self.buffer.put_char(connector_x, splitter_ui_y, " ")
+                            else:
+                                self.buffer.put_char(ui_x, ui_y, " ")
 
-                        if (x, y, "right") in self.connector_lines:
-                            splitter_ui_x = self.px + (self.board_spacing * x)
-                            splitter_ui_y = y + self.py
-                            for offset in range(1, self.board_spacing):
-                                connector_x = splitter_ui_x + offset
-                                self.erased_connector_positions.add(
-                                    (connector_x, splitter_ui_y)
-                                )
-                                self.buffer.put_char(connector_x, splitter_ui_y, " ")
+                            if (x, y, "left") in self.connector_lines:
+                                splitter_ui_x = self.px + (self.board_spacing * x)
+                                splitter_ui_y = y + self.py
+                                for offset in range(1, self.board_spacing):
+                                    connector_x = splitter_ui_x - offset
+                                    self.erased_connector_positions.add(
+                                        (connector_x, splitter_ui_y)
+                                    )
+                                    self.buffer.put_char(
+                                        connector_x, splitter_ui_y, " "
+                                    )
+
+                            if (x, y, "right") in self.connector_lines:
+                                splitter_ui_x = self.px + (self.board_spacing * x)
+                                splitter_ui_y = y + self.py
+                                for offset in range(1, self.board_spacing):
+                                    connector_x = splitter_ui_x + offset
+                                    self.erased_connector_positions.add(
+                                        (connector_x, splitter_ui_y)
+                                    )
+                                    self.buffer.put_char(
+                                        connector_x, splitter_ui_y, " "
+                                    )
 
                 self.pulse_position += self.pulse_direction
 
                 if self.pulse_position - self.pulse_length - 1 >= len(branch):
+                    # Add all positions from this branch to completed set
+                    for pos in self.current_branch_path:
+                        self.completed_beam_positions.add(pos)
+                        # Store the direction permanently
+                        if pos in self.path_directions:
+                            self.completed_path_directions[pos] = self.path_directions[
+                                pos
+                            ]
+
+                    # Store connector lines permanently
+                    for key in self.connector_lines:
+                        self.completed_connector_lines[key] = True
+
                     for pos in self.connector_positions:
                         if pos not in self.erased_connector_positions:
                             self.buffer.put_char(pos[0], pos[1], " ")
@@ -456,7 +487,15 @@ class AdventOfCodeDay07Effect(BaseEffect):
                 self.board_positions.add((ui_x, ui_y))
 
                 is_pulsing = (x, y) in pulse_positions
-                color = self.pulse_color if is_pulsing else self.beam_color
+                is_completed = (x, y) in self.completed_beam_positions
+
+                # Determine color: evergreen if completed, pulse color if pulsing, normal otherwise
+                if is_completed:
+                    color = self.evergreen_color
+                elif is_pulsing:
+                    color = self.pulse_color
+                else:
+                    color = self.beam_color
 
                 if char == "^":
                     if (x, y) in self.splitter_connections:
@@ -467,13 +506,25 @@ class AdventOfCodeDay07Effect(BaseEffect):
                             beam_char = self.splitter_right_char
                         self.changes.add((ui_x, ui_y, bc(beam_char, color)))
                     else:
-                        self.changes.add(
-                            (
-                                ui_x,
-                                ui_y,
-                                bc(self.splitter_char, self.splitter_normal_color),
-                            )
+                        # Use the permanent color assigned to this splitter
+                        splitter_color = self.splitter_colors.get(
+                            (x, y), self.splitter_normal_colors[0]
                         )
+                        self.changes.add(
+                            (ui_x, ui_y, bc(self.splitter_char, splitter_color))
+                        )
+                    continue
+
+                # Render completed beams even if val == 0
+                if is_completed:
+                    direction = self.completed_path_directions.get((x, y), "straight")
+                    if direction == "left":
+                        beam_char = self.beam_left_char
+                    elif direction == "right":
+                        beam_char = self.beam_right_char
+                    else:
+                        beam_char = self.beam_char
+                    self.changes.add((ui_x, ui_y, bc(beam_char, color)))
                     continue
 
                 if val == 0:
@@ -495,6 +546,7 @@ class AdventOfCodeDay07Effect(BaseEffect):
 
                 self.changes.add((ui_x, ui_y, bc(beam_char, color)))
 
+        # Render current branch connector lines
         for (split_x, split_y, direction), _ in self.connector_lines.items():
             if (split_x, split_y) in self.erased_positions:
                 continue
@@ -503,7 +555,14 @@ class AdventOfCodeDay07Effect(BaseEffect):
             splitter_ui_y = split_y + self.py
 
             is_pulsing = (split_x, split_y) in pulse_positions
-            color = self.pulse_color if is_pulsing else self.beam_color
+            is_completed = (split_x, split_y) in self.completed_beam_positions
+
+            if is_completed:
+                color = self.evergreen_color
+            elif is_pulsing:
+                color = self.pulse_color
+            else:
+                color = self.beam_color
 
             if direction == "left":
                 for offset in range(1, self.board_spacing):
@@ -535,6 +594,36 @@ class AdventOfCodeDay07Effect(BaseEffect):
                             )
                         )
                         self.connector_positions.add((connector_x, splitter_ui_y))
+
+        # Render completed connector lines
+        for (split_x, split_y, direction), _ in self.completed_connector_lines.items():
+            splitter_ui_x = self.px + (self.board_spacing * split_x)
+            splitter_ui_y = split_y + self.py
+
+            color = self.evergreen_color
+
+            if direction == "left":
+                for offset in range(1, self.board_spacing):
+                    connector_x = splitter_ui_x - offset
+                    self.changes.add(
+                        (
+                            connector_x,
+                            splitter_ui_y,
+                            bc(self.beam_horizontal_char, color),
+                        )
+                    )
+                    self.connector_positions.add((connector_x, splitter_ui_y))
+            elif direction == "right":
+                for offset in range(1, self.board_spacing):
+                    connector_x = splitter_ui_x + offset
+                    self.changes.add(
+                        (
+                            connector_x,
+                            splitter_ui_y,
+                            bc(self.beam_horizontal_char, color),
+                        )
+                    )
+                    self.connector_positions.add((connector_x, splitter_ui_y))
 
         for screen_x, screen_y in self.virtual_beam_positions:
             if (screen_x, screen_y) in self.erased_virtual_positions:
