@@ -47,73 +47,54 @@ class Solution:
 
         return []
 
-    def is_in_bounds(self, point, width):
+    def is_in_bounds(self, point):
         if point in self.p2_valid_points:
             return True
-        hits = 0
-        x, y = point
-        cur_x = x
-        while cur_x + 1 < width:
-            cur_x += 1
-            if (cur_x, y) in self.data:
-                return False
-            if (cur_x, y) in self.p2_valid_points:
-                hits += 1
 
-        if hits == 0 or hits % 2 == 0:
-            return False
-        return True
+        x, y = point
+        inside = False
+
+        for i in range(len(self.data)):
+            x1, y1 = self.data[i]
+            x2, y2 = self.data[(i + 1) % len(self.data)]
+
+            if ((y1 > y) != (y2 > y)) and (x < (x2 - x1) * (y - y1) / (y2 - y1) + x1):
+                inside = not inside
+
+        return inside
 
     def part2(self):
         """Solve part 2 of the puzzle."""
-        xs = [x for x, _ in self.data]
-        ys = [y for _, y in self.data]
-
-        width = max(xs) + 1
-        height = max(ys) + 1
-
-        x_data = {}
-        y_data = {}
-
-        for x, y in self.data:
-            if x not in x_data:
-                x_data[x] = [y]
-            else:
-                x_data[x].append(y)
-            if y not in y_data:
-                y_data[y] = [x]
-            else:
-                y_data[y].append(x)
-
+        # doesnt work
         valid_points = set()
 
-        for k, v in x_data.items():
-            start = min(v)
-            end = max(v)
-            for y in range(start, end + 1):
-                valid_points.add((k, y))
+        for i in range(len(self.data)):
+            x1, y1 = self.data[i]
+            x2, y2 = self.data[(i + 1) % len(self.data)]
 
-        for k, v in y_data.items():
-            start = min(v)
-            end = max(v)
-            for x in range(start, end + 1):
-                valid_points.add((x, k))
+            if x1 == x2:
+                for y in range(min(y1, y2), max(y1, y2) + 1):
+                    valid_points.add((x1, y))
+            else:
+                for x in range(min(x1, x2), max(x1, x2) + 1):
+                    valid_points.add((x, y1))
 
-        print(f"Shape outline complete")
         self.p2_valid_points = valid_points
 
-        rectangles = []
-        for y1, x1 in self.data:
-            for y2, x2 in [p for p in self.data if p != (x1, y1)]:
-                is_valid = True
-                corners = [(x1, y1), (x1, y2), (x2, y1), (x2, y2)]
-                for corner in corners:
-                    if not self.is_in_bounds(corner, width):
-                        is_valid = False
-                if is_valid:
-                    area = abs((x2 - x1 + 1) * (y2 - y1 + 1))
-                    rectangles.append(area)
-        return max(rectangles)
+        max_area = 0
+        for i, (x1, y1) in enumerate(self.data):
+            for j, (x2, y2) in enumerate(self.data):
+                if i >= j:
+                    continue
+
+                corners = [(x1, y2), (x2, y1)]
+                if all(
+                    self.is_in_bounds(c) for c in corners
+                ):  # are the mirrored corners inbounds
+                    area = (abs(x2 - x1) + 1) * (abs(y2 - y1) + 1)
+                    max_area = max(max_area, area)
+
+        return max_area
 
     def solve(self):
         """Run both parts and print results."""
