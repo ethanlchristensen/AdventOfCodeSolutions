@@ -2,13 +2,8 @@
 Advent of Code 2024 - Day 22
 """
 
-import os
-import re
-import math
 import time
-import json
 import pandas as pd
-import warnings
 
 
 class Solution:

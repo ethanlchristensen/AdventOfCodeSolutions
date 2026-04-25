@@ -4,10 +4,8 @@ Advent of Code 2024 - Day 14
 
 import os
 import re
-import math
 import time
 import pandas as pd
-import matplotlib.pyplot as plt
 from bruhcolor import bruhcolored as bc
 
 

@@ -188,7 +188,7 @@ def setup_day(year, day, download_data=False, animate=False, verbose=True):
                     print(f"✓ Downloaded data to {data_file}")
             else:
                 if verbose:
-                    print(f"✗ Failed to download data")
+                    print("✗ Failed to download data")
         else:
             if verbose:
                 print(f"⚠ {data_file} already exists, skipping download")
@@ -226,23 +226,23 @@ def setup_all_days(year, download_data=False, animate=False):
 
         if file_created:
             created_count += 1
-            print(f"  ✓ Created solution file")
+            print("  ✓ Created solution file")
         else:
-            print(f"  ⚠ Solution file already exists")
+            print("  ⚠ Solution file already exists")
 
         if download_data:
             if data_downloaded:
                 downloaded_count += 1
-                print(f"  ✓ Downloaded data")
+                print("  ✓ Downloaded data")
             else:
-                print(f"  ⚠ Data already exists or download failed")
+                print("  ⚠ Data already exists or download failed")
 
             # Be nice to the server - small delay between downloads
             if day < 25:
                 time.sleep(0.5)
 
     print(f"\n{'=' * 50}")
-    print(f"Setup complete!")
+    print("Setup complete!")
     print(f"  Created {created_count} solution files")
     if download_data:
         print(f"  Downloaded {downloaded_count} data files")

@@ -1,5 +1,5 @@
 import time
-from bruhanimate import Screen, Buffer
+from bruhanimate import Screen
 from bruhcolor import bruhcolored
 
 

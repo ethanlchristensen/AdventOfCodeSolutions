@@ -2,12 +2,8 @@
 Advent of Code 2024 - Day 18
 """
 
-import os
-import re
-import math
 import time
 from collections import deque
-from bruhanimate import Screen, Buffer
 
 
 class Solution:

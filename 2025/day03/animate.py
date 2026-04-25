@@ -1,18 +1,22 @@
 """
 Advent of Code 2025 - Day 3 Animation
+Updated for bruhanimate 0.2.x
 """
 
+import random
+from typing import Optional
+
 from bruhanimate import (
-    Screen,
     BaseEffect,
     Buffer,
     EffectRenderer,
-    SnowEffect,
-    TwinkleEffect,
     FireworkEffect,
+    FireworkSettings,
+    Screen,
+    TwinkleSettings,
+    effect_registry,
     text_to_image,
 )
-
 from bruhcolor import bruhcolored
 
 
@@ -23,7 +27,7 @@ class BatteryBankEffect(BaseEffect):
         background: str,
         data_file: str = "data",
         batteries_to_select: int = 12,
-        second_effect: BaseEffect | None = None,
+        second_effect: Optional[BaseEffect] = None,
         second_effect_halt: int = 1,
         selection_pause_frames: int = 15,
         bank_complete_pause_frames: int = 45,
@@ -81,9 +85,13 @@ class BatteryBankEffect(BaseEffect):
         return t * t * t * (t * (t * 6 - 15) + 10)
 
     def _load_data(self):
-        with open(self.data_file, "r") as f:
-            data = f.read().strip()
-            self.banks = [[int(c) for c in line] for line in data.split("\n")][:25]
+        try:
+            with open(self.data_file, "r") as f:
+                data = f.read().strip()
+                self.banks = [[int(c) for c in line] for line in data.split("\n")][:25]
+        except FileNotFoundError:
+            # Fallback for testing if the data file is missing
+            self.banks = [[random.randint(0, 9) for _ in range(30)] for _ in range(5)]
 
     def _find_next_selection(self) -> tuple[int, int]:
         bank = self.banks[self.current_bank_index]
@@ -426,7 +434,7 @@ class BatteryBankEffect(BaseEffect):
         self._render_total()
 
 
-def animate(screen):
+def animate(screen: Screen):
     renderer = EffectRenderer(
         screen=screen,
         frames=float("inf"),
@@ -436,15 +444,23 @@ def animate(screen):
         transparent=False,
     )
 
-    fireworks = FireworkEffect(Buffer(screen.height, screen.width), " ")
-    fireworks.set_second_effect(
-        second_effect=TwinkleEffect(Buffer(screen.height, screen.width), " ")
+    twinkle = effect_registry.create(
+        "twinkle",
+        Buffer(screen.height, screen.width),
+        " ",
+        settings=TwinkleSettings(density=0.05),
     )
-    fireworks.set_firework_type("random")
-    fireworks.set_firework_color_enabled(True)
-    fireworks.set_firework_color_type("twotone")
 
-    snow_effect = SnowEffect(Buffer(screen.height, screen.width), " ")
+    fireworks = effect_registry.create(
+        "firework",
+        Buffer(screen.height, screen.width),
+        " ",
+        settings=FireworkSettings(
+            firework_type="random", color_enabled=True, color_type="twotone", rate=0.05
+        ),
+    )
+    if isinstance(fireworks, FireworkEffect):
+        fireworks.set_second_effect(twinkle)
 
     renderer.effect = BatteryBankEffect(
         buffer=Buffer(screen.height, screen.width),

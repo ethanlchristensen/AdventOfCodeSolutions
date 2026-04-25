@@ -1,17 +1,19 @@
 """
 Advent of Code 2025 - Day 6 Animation
+Updated for bruhanimate 0.2.x
 """
 
 import random
+from typing import Optional
+
 from bruhanimate import (
-    Screen,
     BaseEffect,
     Buffer,
     EffectRenderer,
-    SnowEffect,
+    Screen,
     TWINKLE_SPEC,
-    TwinkleEffect,
-    FireworkEffect,
+    TwinkleSettings,
+    effect_registry,
 )
 from bruhcolor import bruhcolored as bc
 
@@ -23,7 +25,7 @@ class AdventOfCodeDay06Effect(BaseEffect):
         background: str,
         part: str = "one",
         data_file: str = "data",
-        second_effect: BaseEffect | None = None,
+        second_effect: Optional[BaseEffect] = None,
         second_effect_halt: int = 1,
         scan_speed: int = 2,
         calc_pause_frames: int = 15,
@@ -83,12 +85,18 @@ class AdventOfCodeDay06Effect(BaseEffect):
         self._load_data()
 
     def _load_data(self):
-        with open(self.data_file, "r") as f:
-            lines = f.read().split("\n")
-            self.worksheet_lines = lines[:-1]
-            self.operation_line = lines[-1]
-            if self.worksheet_lines:
-                self.worksheet_width = len(self.worksheet_lines[0])
+        try:
+            with open(self.data_file, "r") as f:
+                lines = f.read().split("\n")
+                self.worksheet_lines = lines[:-1]
+                self.operation_line = lines[-1]
+                if self.worksheet_lines:
+                    self.worksheet_width = len(self.worksheet_lines[0])
+        except FileNotFoundError:
+            # Fallback for testing if the data file is missing
+            self.worksheet_lines = [" 123 ", " 456 ", " 789 "]
+            self.operation_line = " + * "
+            self.worksheet_width = 5
 
         self.scanner_screen_x = self.buffer.width() // 2
 
@@ -469,7 +477,7 @@ class AdventOfCodeDay06Effect(BaseEffect):
         self._render_grand_total()
 
 
-def animate(screen):
+def animate(screen: Screen):
     renderer = EffectRenderer(
         screen=screen,
         frames=float("inf"),
@@ -478,21 +486,20 @@ def animate(screen):
         background=" ",
         transparent=False,
     )
-    fireworks = FireworkEffect(Buffer(screen.height, screen.width), " ")
-    fireworks.set_second_effect(
-        second_effect=TwinkleEffect(Buffer(screen.height, screen.width), " ")
-    )
-    fireworks.set_firework_type("random")
-    fireworks.set_firework_color_enabled(True)
-    fireworks.set_firework_color_type("twotone")
 
-    snow = SnowEffect(Buffer(screen.height, screen.width), " ")
+    twinkle = effect_registry.create(
+        "twinkle",
+        Buffer(screen.height, screen.width),
+        " ",
+        settings=TwinkleSettings(density=0.05),
+    )
+
     renderer.effect = AdventOfCodeDay06Effect(
         buffer=Buffer(screen.height, screen.width),
         background=" ",
         part="two",
         data_file="dataanimate",
-        second_effect=TwinkleEffect(Buffer(screen.height, screen.width), " "),
+        second_effect=twinkle,
         second_effect_halt=20,
         scan_speed=50,
         calc_pause_frames=20,

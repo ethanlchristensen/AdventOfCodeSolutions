@@ -2,9 +2,7 @@
 Advent of Code 2025 - Day 7
 """
 
-from collections import deque
 
-from functools import lru_cache
 
 from bruhcolor import bruhcolored as bc
 
@@ -116,7 +114,7 @@ class Solution:
 
     def solve(self):
         """Run both parts and print results."""
-        print(f"Day 7 Solutions:")
+        print("Day 7 Solutions:")
         print(f"Part 1: {self.part1()}")
         print(f"Part 2: {self.part2()}")
 

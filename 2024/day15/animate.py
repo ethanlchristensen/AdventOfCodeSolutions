@@ -1,5 +1,3 @@
-import time
-import random
 from bruhcolor import bruhcolored as bc
 from bruhanimate import (
     Screen,
@@ -201,7 +199,7 @@ class AdventOfCodeDay15Effect(BaseEffect):
 
     def render_frame(self, frame_number: int):
         if frame_number % self.second_effect_halt == 0:
-            if not self.second_effect is None:
+            if self.second_effect is not None:
                 self.second_effect.render_frame(frame_number=frame_number)
                 self.buffer.sync_with(self.second_effect.buffer)
         self.place_board_on_buffer()

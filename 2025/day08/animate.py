@@ -4,7 +4,6 @@ Advent of Code 2025 - Day 8 Animation
 
 from bruhanimate import Screen, BaseEffect, Buffer, EffectRenderer, SnowEffect
 
-from bruhcolor import bruhcolored as bc
 
 
 class AdventOfCodeDay08Effect(BaseEffect):

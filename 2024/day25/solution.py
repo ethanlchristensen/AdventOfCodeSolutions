@@ -2,9 +2,6 @@
 Advent of Code 2024 - Day 25
 """
 
-import os
-import re
-import math
 import time
 
 

@@ -2,7 +2,6 @@
 Advent of Code 2023 - Day 20
 """
 
-import re
 
 
 class Solution:

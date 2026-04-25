@@ -2,14 +2,9 @@
 Advent of Code 2024 - Day 13
 """
 
-import os
 import re
-import math
 import time
-import numpy as np
-from sympy import nsolve
-from sympy.abc import A, B
-from z3 import Ints, solve as s, And, RealVal
+from z3 import Ints, solve as s, RealVal
 
 
 class Solution:

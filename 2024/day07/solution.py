@@ -2,10 +2,6 @@
 Advent of Code 2024 - Day 7
 """
 
-import os
-import re
-import math
-import time
 import itertools
 
 

@@ -2,11 +2,7 @@
 Advent of Code 2024 - Day 12
 """
 
-import os
-import re
-import math
 import time
-from scipy.spatial import ConvexHull
 
 
 class Solution:

@@ -2,11 +2,7 @@
 Advent of Code 2024 - Day 19
 """
 
-import os
-import re
-import math
 import time
-from tqdm import tqdm
 
 
 class Solution:

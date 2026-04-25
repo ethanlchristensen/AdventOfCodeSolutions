@@ -48,7 +48,7 @@ class Solution:
 
     def solve(self):
         """Run both parts and print results."""
-        print(f"Day 3 Solutions:")
+        print("Day 3 Solutions:")
         print(f"Part 1: {self.part1()}")
         print(f"Part 2: {self.part2()}")
 

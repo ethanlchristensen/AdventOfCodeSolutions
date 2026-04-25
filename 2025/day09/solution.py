@@ -2,7 +2,6 @@
 Advent of Code 2025 - Day 9
 """
 
-import math
 
 
 class Solution:
@@ -98,7 +97,7 @@ class Solution:
 
     def solve(self):
         """Run both parts and print results."""
-        print(f"Day 9 Solutions:")
+        print("Day 9 Solutions:")
         print(f"Part 1: {self.part1()}")
         print(f"Part 2: {self.part2()}")
 

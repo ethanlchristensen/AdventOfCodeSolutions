@@ -1,22 +1,22 @@
 """
 Advent of Code 2025 - Day 4 Animation
+Updated for bruhanimate 0.2.x
 """
 
 import random
+from typing import Optional
 
 from bruhanimate import (
-    Screen,
     BaseEffect,
     Buffer,
     EffectRenderer,
-    MatrixEffect,
-    PlasmaEffect,
     FireworkEffect,
-    TwinkleEffect,
-    SnowEffect,
+    FireworkSettings,
+    Screen,
     TWINKLE_SPEC,
+    TwinkleSettings,
+    effect_registry,
 )
-
 from bruhcolor import bruhcolored as bc
 
 
@@ -27,7 +27,7 @@ class AdventOfCodeDay04Effect(BaseEffect):
         background: str,
         part: str = "one",
         data_file: str = "data",
-        second_effect: BaseEffect | None = None,
+        second_effect: Optional[BaseEffect] = None,
         second_effect_halt: int = 1,
         halt_frames: int = 5,
         check_halt_frames: int = 5,
@@ -110,25 +110,31 @@ class AdventOfCodeDay04Effect(BaseEffect):
         self._load_data()
 
     def _load_data(self):
-        with open(self.data_file, "r") as f:
+        try:
+            with open(self.data_file, "r") as f:
+                self.board_a = [
+                    [c for c in line][: self.board_size]
+                    for line in f.read().strip().split("\n")[: self.board_size]
+                ]
+        except FileNotFoundError:
+            # Fallback for testing
             self.board_a = [
-                [c for c in line][: self.board_size]
-                for line in f.read().strip().split("\n")[: self.board_size]
+                [random.choice(["@", ".", ".", "."]) for _ in range(self.board_size)]
+                for _ in range(self.board_size)
             ]
-            self.board_height = len(self.board_a)
-            self.board_width = len(self.board_a[0])
 
-            self.px = (
-                self.buffer.width() - (self.board_width * self.board_spacing)
-            ) // 2
-            self.py = (self.buffer.height() - self.board_height) // 2
+        self.board_height = len(self.board_a)
+        self.board_width = len(self.board_a[0])
 
-            for y in range(self.board_height):
-                for x in range(self.board_width):
-                    if self.board_a[y][x] == ".":
-                        self.twinkles[
-                            (self.px + (self.board_spacing * x), y + self.py)
-                        ] = TWINKLE_SPEC(char="█", value=random.randint(0, 23))
+        self.px = (self.buffer.width() - (self.board_width * self.board_spacing)) // 2
+        self.py = (self.buffer.height() - self.board_height) // 2
+
+        for y in range(self.board_height):
+            for x in range(self.board_width):
+                if self.board_a[y][x] == ".":
+                    self.twinkles[(self.px + (self.board_spacing * x), y + self.py)] = (
+                        TWINKLE_SPEC(char="█", value=random.randint(0, 23))
+                    )
 
     def update_twinkles(self):
         if self.twinkle_frame_counter % self.twinkle_update_frames != 0:
@@ -148,8 +154,9 @@ class AdventOfCodeDay04Effect(BaseEffect):
 
             if prev_ui_pos in self.twinkles:
                 self.changes[prev_ui_pos] = self.twinkles[prev_ui_pos].fade.colored
-            elif self.board_a[pfy][pfx] == "@":
-                self.changes[prev_ui_pos] = bc("@", 240).colored
+            elif 0 <= pfy < self.board_height and 0 <= pfx < self.board_width:
+                if self.board_a[pfy][pfx] == "@":
+                    self.changes[prev_ui_pos] = bc("@", 240).colored
 
     def clear_board_area(self):
         full_width = self.board_width * self.board_spacing
@@ -326,8 +333,6 @@ class AdventOfCodeDay04Effect(BaseEffect):
             fx, fy = self.fork_lift_position
             if 0 <= fx < self.board_width and 0 <= fy < self.board_height:
                 pos = (self.px + (self.board_spacing * fx), fy + self.py)
-
-                pulse = int(196 + 30 * abs((self.effective_frames % 20) - 10) / 10)
                 self.changes[pos] = bc("█", 27, 27).colored
 
     def update_fading_checked(self):
@@ -385,7 +390,7 @@ class AdventOfCodeDay04Effect(BaseEffect):
         self.place_changes()
 
 
-def animate(screen):
+def animate(screen: Screen):
     renderer = EffectRenderer(
         screen=screen,
         frames=float("inf"),
@@ -395,25 +400,30 @@ def animate(screen):
         transparent=False,
     )
 
-    fireworks = FireworkEffect(Buffer(screen.height, screen.width), " ")
-    fireworks.set_second_effect(
-        second_effect=TwinkleEffect(Buffer(screen.height, screen.width), " ")
+    twinkle = effect_registry.create(
+        "twinkle",
+        Buffer(screen.height, screen.width),
+        " ",
+        settings=TwinkleSettings(density=0.05),
     )
-    fireworks.set_firework_type("random")
-    fireworks.set_firework_color_enabled(True)
-    fireworks.set_firework_color_type("twotone")
 
-    snow_effect = SnowEffect(Buffer(screen.height, screen.width), " ")
-    matrix_effect = MatrixEffect(Buffer(screen.height, screen.width), " ")
-    plasma_effect = PlasmaEffect(Buffer(screen.height, screen.width), " ")
-    plasma_effect.update_color_properties(True, True, False)
+    fireworks = effect_registry.create(
+        "firework",
+        Buffer(screen.height, screen.width),
+        " ",
+        settings=FireworkSettings(
+            firework_type="random", color_enabled=True, color_type="twotone", rate=0.05
+        ),
+    )
+    if isinstance(fireworks, FireworkEffect):
+        fireworks.set_second_effect(twinkle)
 
     renderer.effect = AdventOfCodeDay04Effect(
         buffer=Buffer(screen.height, screen.width),
         background=" ",
         part="two",
         data_file="datasmall",
-        second_effect=TwinkleEffect(Buffer(screen.height, screen.width), " "),
+        second_effect=fireworks,
         second_effect_halt=300,
         halt_frames=30,
         check_halt_frames=50,

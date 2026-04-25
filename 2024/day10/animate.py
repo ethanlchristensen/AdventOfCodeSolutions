@@ -1,6 +1,5 @@
-from bruhanimate import Screen, Buffer, EffectRenderer, BaseEffect
+from bruhanimate import Screen, Buffer, BaseEffect
 from bruhcolor import bruhcolored as bc
-import time
 import uuid
 import random
 
@@ -214,7 +213,7 @@ def run(screen: Screen):
                             )
                             offset_y += 1
                         seen_tiles = [tile.cords() for tile in found_tiles]
-                        if not (x + px + x, y + py + y) in seen_tiles:
+                        if (x + px + x, y + py + y) not in seen_tiles:
                             found_tiles.append(
                                 FoundTile(char=new_value, x=x + px + x, y=y + py)
                             )

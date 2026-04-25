@@ -2,8 +2,6 @@
 Advent of Code 2024 - Day 1
 """
 
-import re
-import numpy as np
 
 
 class Solution:

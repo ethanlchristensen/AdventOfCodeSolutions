@@ -3,8 +3,6 @@ Advent of Code 2024 - Day 20
 """
 
 import os
-import re
-import math
 import time
 from collections import deque as queue
 from bruhcolor import bruhcolored as bc

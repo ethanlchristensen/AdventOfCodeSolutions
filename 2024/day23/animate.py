@@ -1,6 +1,4 @@
-import time
 import string
-import random
 import networkx
 from bruhcolor import bruhcolored as bc
 from bruhanimate import (
@@ -12,9 +10,7 @@ from bruhanimate import (
     TwinkleEffect,
     SnowEffect,
     FireworkEffect,
-    text_to_image,
     DrawLinesEffect,
-    Line,
 )
 
 

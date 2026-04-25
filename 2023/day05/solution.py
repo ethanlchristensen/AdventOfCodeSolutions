@@ -2,10 +2,7 @@
 Advent of Code 2023 - Day 5
 """
 
-import re
 import time
-import numpy as np
-from tqdm import tqdm
 
 
 class Solution:

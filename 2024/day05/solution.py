@@ -3,7 +3,6 @@ Advent of Code 2024 - Day 5
 """
 
 import re
-import itertools
 
 
 class Solution:

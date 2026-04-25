@@ -2,8 +2,6 @@
 Advent of Code 2024 - Day 6
 """
 
-import os
-import re
 import time
 
 
