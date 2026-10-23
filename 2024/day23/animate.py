@@ -1,241 +1,470 @@
+"""Inspect qualifying triangles or grow the largest fully connected LAN."""
+
+from __future__ import annotations
+
+import math
+import re
 import string
-import networkx
-from bruhcolor import bruhcolored as bc
-from bruhanimate import (
-    Screen,
-    BaseEffect,
-    EffectRenderer,
-    Buffer,
-    PlasmaEffect,
-    TwinkleEffect,
-    SnowEffect,
-    FireworkEffect,
-    DrawLinesEffect,
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+from bruhanimate import Buffer, DrawLinesEffect, DrawLinesSettings
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from animation_support import (  # noqa: E402
+    argument_parser,
+    ink,
+    label,
+    load_input,
+    positive_integer,
+    run_animation,
+    run_options,
 )
 
 
-class AdventOfCodeDay23Effect(BaseEffect):
-    def __init__(
-        self,
-        buffer: Buffer,
-        background: str,
-        part: str = "one",
-        data_file: str = "data",
-        second_effect: DrawLinesEffect = None,
-        second_effect_halt: int = 1,
-        third_effect: SnowEffect | PlasmaEffect | FireworkEffect | TwinkleEffect = None,
-    ):
-        super(AdventOfCodeDay23Effect, self).__init__(buffer, background)
-        self.part = part
-        self.data_file = data_file
-        self.second_effect = second_effect
-        self.second_effect_halt = second_effect_halt
-        self.third_effect = third_effect
-        self.network = 0
-        self.N = 26
-        self.board = [
-            [bc(text=".", color="232").colored for _ in range(self.N)]
-            for _ in range(self.N)
-        ]
-        self.nodes = set()
-        self.edges = set()
-        self.graph = None
-        self.valid_networks = None
-        self.__load_data()
+@dataclass(frozen=True)
+class Network:
+    """Sorted names and symmetric immutable adjacency, with duplicate edges removed."""
 
-    def __load_data(self):
-        with open(self.data_file, "r") as file:
-            data = [
-                tuple(line.strip().split("-")) for line in file if line.strip() != ""
-            ]
-            for c1, c2 in data:
-                self.nodes.add(c1)
-                self.nodes.add(c2)
-                self.edges.add((c1, c2))
-                self.edges.add((c2, c1))
-            self.graph = networkx.Graph()
-            self.graph.add_nodes_from(self.nodes)
-            self.graph.add_edges_from(self.edges)
+    names: tuple[str, ...]
+    neighbors: tuple[frozenset[int], ...]
 
-    def get_padding(self):
-        return (self.buffer.width() - (len(self.board[0]) * 2)) // 2, (
-            self.buffer.height() - len(self.board)
-        ) // 2
 
-    def place_board_on_buffer(self):
-        px, py = self.get_padding()
-        for y in range(len(self.board)):
-            self.buffer.put_char(x=px - 2, y=y + py, val=string.ascii_uppercase[y])
-        x_offset = 0
-        for x in range(len(self.board[0])):
-            self.buffer.put_char(
-                x=x + px + x_offset, y=py - 1, val=string.ascii_uppercase[x]
+def parse_input(text):
+    edges = set()
+    names = set()
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        values = line.strip().split("-")
+        if len(values) != 2 or not all(
+            re.fullmatch(r"[A-Za-z0-9_]+", value) for value in values
+        ):
+            raise ValueError(
+                f"Line {number}: expected two computer names separated by '-' "
             )
-            x_offset += 1
-        for y in range(len(self.board)):
-            x_offset = 0
-            for x in range(len(self.board[0])):
-                char = self.board[y][x]
-                if char == " ":
-                    x_offset += 1
-                    continue
-                self.buffer.put_char(
-                    x=x + px + x_offset, y=y + py, val=char, transparent=True
+        left, right = values
+        if left == right:
+            raise ValueError(f"Line {number}: self connections are not allowed")
+        edges.add(tuple(sorted((left, right))))
+        names.update(values)
+    names = tuple(sorted(names))
+    indices = {name: index for index, name in enumerate(names)}
+    neighbors = [set() for _ in names]
+    for left, right in edges:
+        a, b = indices[left], indices[right]
+        neighbors[a].add(b)
+        neighbors[b].add(a)
+    return Network(names, tuple(frozenset(values) for values in neighbors))
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    """Only the current search branch and best answer are retained, never a trace."""
+
+    network: Network
+    part: int
+    phase: str
+    current: tuple[int, ...] = ()
+    best: tuple[int, ...] = ()
+    checked: int = 0
+    triangles: int = 0
+    qualifying: int = 0
+    accepted: bool = False
+    candidates: tuple[int, ...] = ()
+    pruned: bool = False
+    seen: frozenset[int] = frozenset()
+
+
+def snapshots(network, *, part=2, batch=32):
+    """Yield exact results with bounded search expansions between snapshots.
+
+    Part 1 intersects neighbor sets to visit each triangle once. Part 2 uses
+    iterative include/exclude branch and bound, with at most one pending
+    exclude branch per depth. It never materializes all cliques and does not
+    require networkx. Maximum clique remains exponential in the worst case;
+    --search-batch bounds expansions per yield, not the total work.
+    """
+    if part not in (1, 2) or batch < 1:
+        raise ValueError("part must be 1 or 2 and search batch must be positive")
+    yield Snapshot(
+        network,
+        part,
+        "ready",
+        candidates=tuple(range(len(network.names))) if part == 2 else (),
+    )
+    checked = triangles = qualifying = 0
+    if part == 1:
+        example, last_triangle = (), ()
+        seen = frozenset()
+        for a, neighbors in enumerate(network.neighbors):
+            for b in sorted(node for node in neighbors if node > a):
+                checked += 1
+                if checked % batch == 0:
+                    yield Snapshot(
+                        network,
+                        part,
+                        "search",
+                        example,
+                        checked=checked,
+                        triangles=triangles,
+                        qualifying=qualifying,
+                        accepted=bool(example),
+                        seen=seen,
+                    )
+                for c in sorted(
+                    node for node in neighbors & network.neighbors[b] if node > b
+                ):
+                    triangles += 1
+                    clique = (a, b, c)
+                    accepted = any(
+                        network.names[node].startswith("t") for node in clique
+                    )
+                    qualifying += accepted
+                    last_triangle = clique
+                    if accepted:
+                        example = clique
+                        yield Snapshot(
+                            network,
+                            part,
+                            "triangle",
+                            clique,
+                            checked=checked,
+                            triangles=triangles,
+                            qualifying=qualifying,
+                            accepted=True,
+                            seen=seen,
+                        )
+                        seen = seen | frozenset(clique)
+                    elif triangles % batch == 0:
+                        yield Snapshot(
+                            network,
+                            part,
+                            "search",
+                            example,
+                            checked=checked,
+                            triangles=triangles,
+                            qualifying=qualifying,
+                            accepted=bool(example),
+                            seen=seen,
+                        )
+        yield Snapshot(
+            network,
+            part,
+            "complete",
+            current=example or last_triangle,
+            checked=checked,
+            triangles=triangles,
+            qualifying=qualifying,
+            accepted=bool(example),
+            seen=seen,
+        )
+        return
+    candidates = tuple(
+        sorted(range(len(network.names)), key=lambda n: (-len(network.neighbors[n]), n))
+    )
+    stack = [((), candidates)]
+    best = ()
+    current = ()
+    while stack:
+        current, candidates = stack.pop()
+        checked += 1
+        ordered = tuple(sorted(current))
+        improved = len(ordered) > len(best) or (
+            len(ordered) == len(best) and ordered < best
+        )
+        if improved:
+            best = ordered
+        pruned = len(current) + len(candidates) < len(best)
+        if not pruned and candidates:
+            node, rest = candidates[0], candidates[1:]
+            stack.append((current, rest))
+            stack.append(
+                (
+                    (*current, node),
+                    tuple(n for n in rest if n in network.neighbors[node]),
                 )
-                x_offset += 1
-
-    def computer_to_coordinate(self, computer):
-        x, y = computer[0], computer[1]
-        x = string.ascii_lowercase.index(x)
-        y = string.ascii_lowercase.index(y)
-        return (x, y)
-
-    def render_frame(self, frame_number: int):
-        if self.third_effect:
-            self.third_effect.render_frame(frame_number=frame_number)
-
-        if frame_number % self.second_effect_halt == 0:
-            px, py = self.get_padding()
-            if not self.valid_networks:
-                networks = list(networkx.enumerate_all_cliques(self.graph))
-                triples = [network for network in networks if len(network) == 3]
-                self.valid_networks = [
-                    network
-                    for network in triples
-                    if any([node.startswith("t") for node in network])
-                ]
-
-            # Clear buffer and lines each time
-            self.buffer.clear_buffer()
-            self.second_effect.buffer.clear_buffer()
-            self.second_effect.lines = []
-
-            # Process past networks (gray)
-            for idx, network in enumerate(self.valid_networks[: self.network]):
-                coords = [self.computer_to_coordinate(computer) for computer in network]
-                for x, y in coords:
-                    self.board[y][x] = bc(text="@", color=240).colored
-
-            # Process current network (green with lines)
-            if self.network < len(self.valid_networks):
-                network = self.valid_networks[self.network]
-                coords = [self.computer_to_coordinate(computer) for computer in network]
-
-                # Mark nodes
-                for x, y in coords:
-                    self.board[y][x] = bc(text="@", color=76).colored
-
-                # Add lines between all nodes in the current triangle
-                if len(coords) >= 2:  # Need at least 2 points for a line
-                    for i in range(len(coords)):
-                        for j in range(i + 1, len(coords)):
-                            x1, y1 = coords[i]
-                            x2, y2 = coords[j]
-                            # Convert to screen coordinates
-                            screen_x1 = x1 * 2 + px
-                            screen_x2 = x2 * 2 + px
-                            screen_y1 = y1 + py
-                            screen_y2 = y2 + py
-
-                            # Add the line to second_effect
-                            self.second_effect.add_line(
-                                start_point=(screen_x1, screen_y1),
-                                end_point=(screen_x2, screen_y2),
-                            )
-
-            # If we're at the end, just show all nodes in gray
-            elif self.network == len(self.valid_networks):
-                for network in self.valid_networks:
-                    coords = [
-                        self.computer_to_coordinate(computer) for computer in network
-                    ]
-                    for x, y in coords:
-                        self.board[y][x] = bc(text="@", color=240).colored
-
-            # Apply third effect if present
-            if self.third_effect:
-                self.buffer.sync_with(self.third_effect.buffer)
-
-            # Place the board on the buffer
-            self.place_board_on_buffer()
-
-            # Render the lines
-            self.second_effect.render_frame(frame_number=0)  # Always use frame 0
-
-            # Merge the line effects onto the main buffer
-            for y in range(self.buffer.height()):
-                for x in range(self.buffer.width()):
-                    effect_char = self.second_effect.buffer.get_char(x, y)
-                    main_char = self.buffer.get_char(x, y)
-                    if (
-                        effect_char != " "
-                        and main_char != bc(text="@", color=76).colored
-                    ):
-                        self.buffer.put_char(x, y, effect_char)
-
-            # Show stats
-            text = f"Total Triples: {self.network + 1} / {len(self.valid_networks)}"
-            self.buffer.put_at(x=0, y=0, text=text)
-
-            # Move to next network for next frame
-            self.network += 1
-        else:
-            # Non-update frame, just redraw current state
-            # Keep the current visualization without advancing
-            self.buffer.clear_buffer()
-            if self.third_effect:
-                self.buffer.sync_with(self.third_effect.buffer)
-            self.place_board_on_buffer()
-            self.second_effect.render_frame(frame_number=0)  # Always use frame 0
-
-            for y in range(self.buffer.height()):
-                for x in range(self.buffer.width()):
-                    effect_char = self.second_effect.buffer.get_char(x, y)
-                    main_char = self.buffer.get_char(x, y)
-                    if (
-                        effect_char != " "
-                        and main_char != bc(text="@", color=76).colored
-                    ):
-                        self.buffer.put_char(x, y, effect_char)
-
-            text = f"Total Triples: {self.network} / {len(self.valid_networks) if self.valid_networks else 0}"
-            self.buffer.put_at(x=0, y=0, text=text)
+            )
+        if improved or checked % batch == 0:
+            yield Snapshot(
+                network,
+                part,
+                "best" if improved else "search",
+                current,
+                best,
+                checked,
+                candidates=candidates,
+                pruned=pruned,
+            )
+    yield Snapshot(network, part, "complete", best, best, checked)
 
 
-def animate(screen: Screen):
-    renderer = EffectRenderer(
-        screen=screen,
-        frames=float("inf"),
-        frame_time=0.05,
-        effect_type="static",
-        background=" ",
-        transparent=False,
+def action(state):
+    """Explain the current solver event in puzzle terms rather than graph jargon."""
+    if not state.network.names:
+        return "No computers in the input."
+    if state.part == 1:
+        if state.phase == "complete":
+            return f"COMPLETE: {state.qualifying} triangles contain a name starting with t."
+        if state.phase == "triangle":
+            return (
+                "COUNT THIS TRIANGLE: contains a t-name."
+                if state.accepted
+                else "SKIP THIS TRIANGLE: no name starts with t."
+            )
+        return "Checking a cable for a third computer linked to both ends."
+    if state.phase == "complete":
+        return f"COMPLETE: largest group has {len(state.best)} computers."
+    if state.phase == "ready":
+        return "Start empty; add only computers linked to EVERY current member."
+    if state.phase == "best":
+        return f"NEW BEST: {len(state.best)} computers, all connected to one another."
+    if state.pruned:
+        return f"SKIP BRANCH: at most {len(state.current) + len(state.candidates)} computers; best has {len(state.best)}."
+    if state.candidates:
+        return f"GROW GROUP: {len(state.candidates)} remaining computers can join this branch."
+    return "Backtracking to try a different group."
+
+
+def password_lines(names, width):
+    """Wrap an exact password at commas, preserving every name."""
+    lines, line = [], ""
+    for index, name in enumerate(names):
+        token = name + ("," if index < len(names) - 1 else "")
+        if line and len(line) + len(token) > width:
+            lines.append(line)
+            line = ""
+        while len(token) > width:
+            lines.append(token[:width])
+            token = token[width:]
+        line += token
+    if line:
+        lines.append(line)
+    return lines
+
+
+def coordinates(network):
+    """Restore the original first-letter X / second-letter Y mapping.
+
+    Non-two-letter names use a stable row-major layout instead of colliding or
+    inventing letter coordinates. Both layouts stay fixed throughout playback.
+    """
+    alphabetic = all(re.fullmatch(r"[a-z]{2}", name) for name in network.names)
+    if alphabetic:
+        return (
+            {
+                node: (ord(name[0]) - 97, ord(name[1]) - 97)
+                for node, name in enumerate(network.names)
+            },
+            26,
+            26,
+            True,
+        )
+    columns = max(1, math.ceil(math.sqrt(len(network.names))))
+    rows = max(1, math.ceil(len(network.names) / columns))
+    return (
+        {node: (node % columns, node // columns) for node in range(len(network.names))},
+        columns,
+        rows,
+        False,
     )
 
-    second_effect = DrawLinesEffect(
-        buffer=Buffer(screen.height, screen.width), background=" ", thin=False
+
+def triangle_preview(state):
+    """Part 1 shows a qualifying triple; part 2 draws at most three edges."""
+    if state.part == 1:
+        return state.current if state.accepted and state.phase != "complete" else ()
+    group = tuple(sorted(state.current if len(state.current) >= 3 else state.best))
+    if len(group) <= 3:
+        return group
+    offset = state.checked % len(group)
+    return tuple(group[(offset + index) % len(group)] for index in range(3))
+
+
+def draw_line(buffer, start, end):
+    """Use the original sub-cell character renderer rather than approximating it."""
+    raster = Buffer(buffer.height(), buffer.width())
+    effect = DrawLinesEffect(raster, " ", settings=DrawLinesSettings(thin=False))
+    try:
+        effect.start()
+        effect.add_line(start, end)
+        effect.update(0)
+        for y, row in enumerate(raster.buffer):
+            for x, char in enumerate(row):
+                if char != " ":
+                    buffer.put_char(x, y, ink(char, 76))
+    finally:
+        effect.close()
+
+
+def draw(state, buffer):
+    """Render the original fixed coordinate board and one green triangle.
+
+    Previously displayed triangle members stay gray, active vertices are green,
+    and only three connecting edges are shown. Short terminals compress the
+    full board explicitly; they do not move nodes to a changing circle.
+    """
+    width, height = buffer.width(), buffer.height()
+    if width < 1 or height < 7:
+        return
+    preview = triangle_preview(state)
+    names = tuple(state.network.names[node] for node in preview)
+    label(
+        buffer,
+        0,
+        2,
+        "A-Z grid: first letter across, second letter down"
+        if all(re.fullmatch(r"[a-z]{2}", n) for n in state.network.names)
+        else "Stable name grid: sorted names, left to right / top to bottom",
+        245,
     )
-    twinke_effect = TwinkleEffect(Buffer(screen.height, screen.width), " ")
-    firework_effect = FireworkEffect(Buffer(screen.height, screen.width), " ")
-    firework_effect.set_firework_color_enabled(True)
-    firework_effect.set_firework_color_type("twotone")
-    firework_effect.set_second_effect(second_effect=twinke_effect)
-    firework_effect.set_firework_type("random")
-    plasma_effect = PlasmaEffect(Buffer(screen.height, screen.width), " ")
-    plasma_effect.update_color_properties(True, True, False)
+    headline = (
+        f"Triangle {state.qualifying}: {', '.join(names)}"
+        if state.part == 1 and preview
+        else "All qualifying triangles shown."
+        if state.part == 1 and state.phase == "complete"
+        else "Searching for the next triangle with a t-name..."
+        if state.part == 1
+        else f"Triangle preview: {', '.join(names) or '-'} | best group: {len(state.best)}"
+    )
+    label(buffer, 0, 3, headline, 76)
+    if height < 14 or width < 16:
+        label(buffer, 0, height - 2, action(state), 51)
+        return
+    points, columns, rows, alphabetic = coordinates(state.network)
+    span_x, span_y = min((columns - 1) * 2, width - 8), min(rows - 1, height - 11)
+    x0 = (width - span_x - 1) // 2
+    y0 = 6 + max(0, (height - 11 - span_y) // 2)
 
-    renderer.effect = AdventOfCodeDay23Effect(
-        buffer=Buffer(screen.height, screen.width),
-        background=" ",
-        part="two",
-        data_file="data",  # from advent of code
-        second_effect=second_effect,
-        second_effect_halt=1,
-        third_effect=firework_effect,
+    def screen(point):
+        x, y = point
+        return (
+            x0 + x * span_x // max(1, columns - 1),
+            y0 + y * span_y // max(1, rows - 1),
+        )
+
+    compressed = span_x < columns - 1 or span_y < rows - 1
+    if state.part == 2:
+        message = f"Only {len(preview)} nodes / {len(preview) * (len(preview) - 1) // 2} edges shown; the complete group is still solved."
+    else:
+        message = "Gray @: earlier triangles | Green @ and lines: current triangle"
+    label(buffer, 0, 4, message, 245)
+    for y in range(rows):
+        for x in range(columns):
+            sx, sy = screen((x, y))
+            buffer.put_char(sx, sy, ink(".", 234))
+    x_step = max(1, math.ceil((columns - 1) / max(1, span_x)))
+    y_step = max(1, math.ceil((rows - 1) / max(1, span_y)))
+    for x in sorted(set(range(0, columns, x_step)) | {columns - 1}):
+        sx, _ = screen((x, 0))
+        label(
+            buffer,
+            sx,
+            y0 - 1,
+            string.ascii_uppercase[x] if alphabetic else str(x % 10),
+            245,
+        )
+    for y in sorted(set(range(0, rows, y_step)) | {rows - 1}):
+        _, sy = screen((0, y))
+        label(
+            buffer,
+            x0 - 2,
+            sy,
+            string.ascii_uppercase[y] if alphabetic else str(y % 10),
+            245,
+        )
+    for node in state.seen:
+        buffer.put_char(*screen(points[node]), ink("@", 240))
+    if state.part == 2:
+        for node in state.best:
+            buffer.put_char(*screen(points[node]), ink("@", 51))
+    for index, node in enumerate(preview):
+        for other in preview[index + 1 :]:
+            if other in state.network.neighbors[node]:
+                draw_line(buffer, screen(points[node]), screen(points[other]))
+    # Vertices paint after edges, preserving the original green @ markers.
+    for node in preview:
+        buffer.put_char(*screen(points[node]), ink("@", 76))
+    if state.part == 1:
+        links = (
+            " | ".join(f"{names[i]} <-> {names[(i + 1) % 3]}" for i in range(3))
+            if len(names) == 3
+            else "No active triangle"
+        )
+        label(buffer, 0, height - 4, links, 76)
+        label(
+            buffer,
+            0,
+            height - 3,
+            "Compact grid: coordinates may share cells; enlarge terminal for full A-Z spacing."
+            if compressed
+            else "Each @ sits at its two-letter coordinate; only the current triangle has lines.",
+            245,
+        )
+        label(
+            buffer,
+            0,
+            height - 2,
+            f"Qualifying triangles: {state.qualifying} | All triangles examined: {state.triangles}",
+            51,
+        )
+    else:
+        label(buffer, 0, height - 4, action(state), 51)
+        result = tuple(state.network.names[n] for n in sorted(state.best))
+        lines = password_lines(result, max(1, width - 10)) or ["(empty)"]
+        for index, text in enumerate(lines[:2]):
+            label(
+                buffer,
+                0,
+                height - 3 + index,
+                ("Password: " if index == 0 else "          ") + text,
+                51,
+            )
+        if len(lines) > 2:
+            label(
+                buffer,
+                0,
+                height - 2,
+                "... enlarge terminal for the complete password",
+                226,
+            )
+
+
+def describe(state):
+    if state.part == 1:
+        return f"Triangles with t*: {state.qualifying} | all triangles: {state.triangles} | edges checked: {state.checked}"
+    return f"Computers: {len(state.network.names)} | Current group: {len(state.current)} | Largest found: {len(state.best)} | Branches checked: {state.checked}"
+
+
+def main(argv=None):
+    parser = argument_parser(__doc__, __file__, "data", rate=10)
+    parser.set_defaults(part=1, no_background=True)
+    parser.add_argument(
+        "--background",
+        dest="no_background",
+        action="store_false",
+        help="Enable the decorative background (off by default)",
+    )
+    parser.add_argument(
+        "--search-batch",
+        type=positive_integer,
+        default=32,
+        help="part 2: maximum branch expansions between visual updates",
+    )
+    args = parser.parse_args(argv)
+    network = load_input(parser, args, parse_input)
+    return run_animation(
+        snapshots(network, part=args.part, batch=args.search_batch),
+        draw,
+        title=f"2024 Day 23 / part {args.part}",
+        describe=describe,
+        **run_options(args),
     )
 
-    renderer.run()
 
-
-if __name__ in ["__main__", "day23_animate"]:
-    Screen.show(animate)
+if __name__ == "__main__":
+    main()

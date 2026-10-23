@@ -1,12 +1,12 @@
 import argparse
+import importlib.util
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
-import requests
-import importlib.util
-import time
 
+import requests
 
 DEFAULT_YEAR = datetime.now().year
 SESSION_FILE = ".aoc_session"
@@ -20,22 +20,22 @@ Advent of Code {year} - Day {day}
 class Solution:
     def __init__(self, data_file="data"):
         self.data = self.load_data(data_file)
-    
+
     def load_data(self, filename):
         """Load and parse the input data."""
         with open(filename, 'r') as f:
             return f.read().strip()
-    
+
     def part1(self):
         """Solve part 1 of the puzzle."""
         # TODO: Implement part 1
         return None
-    
+
     def part2(self):
         """Solve part 2 of the puzzle."""
         # TODO: Implement part 2
         return None
-    
+
     def solve(self):
         """Run both parts and print results."""
         print(f"Day {day} Solutions:")
@@ -48,74 +48,71 @@ if __name__ == "__main__":
     solution.solve()
 '''
 
-ANIMATION_TEMPLATE = '''"""
-Advent of Code {year} - Day {day} Animation
+ANIMATION_TEMPLATE = '''"""Advent of Code {year}, Day {day}: bruhanimate 1.x starter.
+
+This previews input lines. Replace parse_input, states and draw with puzzle rules.
+Imports are inert; main() owns input loading and delegates playback/cleanup.
 """
 
-from bruhanimate import (
-    Screen,
-    BaseEffect,
-    Buffer,
-    EffectRenderer,
-    SnowEffect
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from animation_support import (  # noqa: E402
+    argument_parser,
+    label,
+    load_input,
+    run_animation,
+    run_options,
 )
 
-from bruhcolor import bruhcolored as bc
 
-class AdventOfCodeDay{day:02d}Effect(BaseEffect):
-    def __init__(
-        self,
-        buffer: Buffer,
-        background: str,
-        part: str = "one",
-        data_file: str = "data",
-        second_effect: BaseEffect | None = None,
-        second_effect_halt: int = 1,
-    ):
-        super().__init__(buffer, background)
-        self.part = part
-        self.data_file = data_file
-        self.second_effect = second_effect
-        self.second_effect_halt = second_effect_halt
-        self.data = None
-
-        self._load_data()
-    
-    def _load_data(self):
-        with open(self.data_file, "r") as f:
-            self.data = f.read().strip()
-
-    def render_frame(self, frame_number: int):
-        if frame_number % self.second_effect_halt == 0:
-            if self.second_effect is not None:
-                self.second_effect.render_frame(frame_number=frame_number)
-                self.buffer.sync_with(self.second_effect.buffer)
+@dataclass(frozen=True)
+class Snapshot:
+    index: int = 0
+    text: str = ""
+    phase: str = "ready"
 
 
-def animate(screen):
-    renderer = EffectRenderer(
-        screen=screen,
-        frames=float("inf"),
-        frame_time=0.05,
-        effect_type="static",
-        background=" ",
-        transparent=False,
+def parse_input(text):
+    """Parse and validate puzzle input here, before opening a terminal."""
+    return tuple(line.expandtabs(4) for line in text.splitlines())
+
+
+def states(lines):
+    """Yield independent snapshots lazily; replace with your solver's events."""
+    yield Snapshot()
+    for index, line in enumerate(lines, 1):
+        yield Snapshot(index, line, "preview")
+    yield Snapshot(len(lines), lines[-1] if lines else "", "complete")
+
+
+def draw(state, buffer):
+    """Draw the current snapshot without advancing the solver."""
+    label(buffer, 0, 3, "Input preview", 245)
+    label(buffer, 0, 5, state.text, 51)
+
+
+def main(argv=None):
+    parser = argument_parser(__doc__, __file__, part=1, background=False)
+    args = parser.parse_args(argv)
+    lines = load_input(parser, args, parse_input)
+    return run_animation(
+        states(lines), draw,
+        title=f"{year} Day {day} | Part {{args.part}} | Input preview",
+        describe=lambda state: f"Line {{state.index}}/{{len(lines)}}",
+        **run_options(args),
     )
 
-    snow = SnowEffect(Buffer(screen.height, screen.width), " ")
-    renderer.effect = AdventOfCodeDay{day:02d}Effect(
-        buffer=Buffer(screen.height, screen.width),
-        background=" ",
-        part="two",
-        data_file="data",
-        second_effect=snow,
-        second_effect_halt=3,
-    )
 
-    renderer.run()
-
-if __name__ in ["__main__", "day{day:02d}_animate"]:
-    Screen.show(animate)
+if __name__ == "__main__":
+    main()
 '''
 
 
@@ -200,7 +197,7 @@ def setup_day(year, day, download_data=False, animate=False, verbose=True):
         animation_file = day_folder / "animate.py"
         if not animation_file.exists():
             content = ANIMATION_TEMPLATE.format(year=year, day=day)
-            animation_file.write_text(content)
+            animation_file.write_text(content, encoding="utf-8")
             if verbose:
                 print(f"✓ Created {animation_file}")
         else:
@@ -350,8 +347,24 @@ def run_all_solutions(year=None):
         )
 
 
-def run_animation(year, day):
-    """Run animation for a specific day."""
+def run_animation(year, day, argv=None):
+    """Run a day's entrypoint, forwarding options and restoring the directory.
+
+    Relative --input paths resolve from the invoking directory, even though
+    animation imports/entrypoints run in the day's directory for existing demos.
+    """
+    animation_args = list(argv or ())
+    if animation_args[:1] == ["--"]:
+        animation_args.pop(0)
+    for index, argument in enumerate(animation_args):
+        if argument == "--input" and index + 1 < len(animation_args):
+            animation_args[index + 1] = str(
+                Path(animation_args[index + 1]).expanduser().resolve()
+            )
+        elif argument.startswith("--input="):
+            animation_args[index] = "--input=" + str(
+                Path(argument.split("=", 1)[1]).expanduser().resolve()
+            )
     day_folder = Path(f"{year}/day{day:02d}")
     animation_file = day_folder / "animate.py"
 
@@ -370,7 +383,10 @@ def run_animation(year, day):
     os.chdir(day_folder)
 
     try:
+        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
+        if callable(getattr(module, "main", None)):
+            module.main(animation_args)
         return True
     except Exception as e:
         print(f"Error running animation for year {year}, day {day}: {e}")
@@ -457,7 +473,7 @@ Examples:
     %(prog)s setup --all                    # Setup all 25 days for current year
     %(prog)s setup --all --download         # Setup all 25 days and download data
     %(prog)s setup --all --year 2023        # Setup all 25 days for 2023
-  
+
   Run commands:
     %(prog)s run                            # Run today's solution
     %(prog)s run --day 5                    # Run day 5 for current year
@@ -469,6 +485,7 @@ Examples:
     %(prog)s animate                        # Run today's animation
     %(prog)s animate --day 5                # Run animation for day 5
     %(prog)s animate --year 2023 --day 5    # Run animation for 2023 day 5
+    %(prog)s animate --year 2024 --day 23 -- --part 2  # Forward animation options
     %(prog)s list                           # List all available animations
     %(prog)s list --year 2023               # List animations for 2023
 
@@ -544,6 +561,11 @@ Folder structure:
         default=get_current_year(),
         help=f"Year to animate (default: current year in December, otherwise {DEFAULT_YEAR})",
     )
+    animate_parser.add_argument(
+        "animation_args",
+        nargs=argparse.REMAINDER,
+        help="Animation options after --, for example -- --part 1 --no-background",
+    )
 
     # List command
     list_parser = subparsers.add_parser("list", help="List available animations")
@@ -577,7 +599,8 @@ Folder structure:
             run_solution(args.year, args.day)
 
     elif args.command == "animate":
-        run_animation(args.year, args.day)
+        if not run_animation(args.year, args.day, args.animation_args):
+            sys.exit(1)
 
     elif args.command == "list":
         list_animations(args.year)

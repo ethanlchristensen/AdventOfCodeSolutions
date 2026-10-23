@@ -1,291 +1,234 @@
-from bruhanimate import Screen, Buffer, BaseEffect
-from bruhcolor import bruhcolored as bc
-import uuid
-import random
+"""Hoof It: height waves and exact trail scores with bruhanimate 1.x."""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from bruhanimate import GridViewport  # noqa: E402
+
+from animation_support import (  # noqa: E402
+    argument_parser,
+    ink,
+    label,
+    load_input,
+    run_animation,
+    run_options,
+)
+
+Point = tuple[int, int]
 
 
-class AdventOfCodeDay10Effect(BaseEffect):
-    def __init__(self, buffer: Buffer, background: str):
-        super(AdventOfCodeDay10Effect).__init__(buffer, background)
+@dataclass(frozen=True)
+class Snapshot:
+    rows: tuple[str, ...]
+    part: int
+    phase: str = "height wave"
+    current: Point = (0, 0)
+    height: int = 9
+    processed: int = 0
+    trailhead: Point | None = None
+    highlighted: frozenset[Point] = frozenset()
+    peaks: frozenset[Point] = frozenset()
+    head_score: int = 0
+    head_rating: int = 0
+    heads_done: int = 0
+    heads_total: int = 0
+    score: int = 0
+    rating: int = 0
 
-    def render_frame(self, frame_number: int):
-        pass
-
-
-class FoundTile:
-    def __init__(self, char, x, y, value=9, hang_time=20):
-        self.char = char
-        self.x = x
-        self.y = y
-        self.value = value
-        self.color_mapping = {
-            -1: None,
-            0: 233,
-            1: 234,
-            2: 236,
-            3: 238,
-            4: 240,
-            5: 242,
-            6: 244,
-            7: 247,
-            8: 252,
-            9: 255,
-        }
-        self.active = True
-        self.hang_time = hang_time
-        self.tick = 0
-
-    def _tick(self):
-        self.tick += 1
-
-    def update(self):
-        if not self.tick % self.hang_time == 0:
-            return
-        if not self.active:
-            return
-        self.value -= 1
-        if self.value == -1:
-            self.active = False
-
-    def get_colored(self):
-        return bc(
-            text=self.char, color=255, on_color=self.color_mapping[self.value]
-        ).colored
-
-    def cords(self):
-        return (self.x, self.y)
+    @property
+    def answer(self):
+        return self.score if self.part == 1 else self.rating
 
 
-def load_data(name="data"):
-    with open(name, "r") as file:
-        return [list(line.strip()) for line in file.readlines()]
+def parse(text):
+    """Accept a nonempty rectangular height map; dots are impassable cells."""
+    rows = tuple(text.strip().splitlines())
+    if not rows or not rows[0] or any(len(row) != len(rows[0]) for row in rows):
+        raise ValueError("Expected a nonempty rectangular height map")
+    if any(char not in "0123456789." for row in rows for char in row):
+        raise ValueError("Height maps may contain only digits and dots")
+    return rows
 
 
-def find_all_trail_heads(data):
-    trail_heads = []
-    for y in range(len(data)):
-        for x in range(len(data[0])):
-            if data[y][x] == "0":
-                trail_heads.append((x, y))
-    return trail_heads
+def neighbors(rows, point):
+    x, y = point
+    for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0)):
+        nx, ny = x + dx, y + dy
+        if 0 <= ny < len(rows) and 0 <= nx < len(rows[0]):
+            yield nx, ny
 
 
-found_tiles = []
-paths_hit = 0
+def snapshots(rows, part=2):
+    """Count a height DAG bottom-up, then illuminate each trailhead's routes.
 
-
-def run(screen: Screen):
-    global found_tiles, paths_hit
-
-    directions = [[1, 0], [0, 1], [-1, 0], [0, -1]]
-
-    data = load_data()
-
-    tiles_traversed = {}
-
-    def get_total_trail_heads():
-        output = 0
-        for k, v in tiles_traversed.items():
-            output += v["trail_heads"]
-        return output
-
-    def get_total_found_paths():
-        output = 0
-        for k, v in tiles_traversed.items():
-            output += v["paths_found"]
-        return output
-
-    def get_padding_x_y():
-        return (
-            (screen.width - (len(data[0]) * 2)) // 2,
-            (screen.height - len(data)) // 2,
+    Each cell stores an integer path count and a frozen set of reachable peaks.
+    Converging paths are counted separately for part 2 but share peak sets for
+    part 1. The source yields one cell or one trailhead at a time, never paths.
+    """
+    if part not in (1, 2):
+        raise ValueError("part must be 1 or 2")
+    levels = [[] for _ in range(10)]
+    for y, row in enumerate(rows):
+        for x, char in enumerate(row):
+            if char != ".":
+                levels[int(char)].append((x, y))
+    state = Snapshot(rows, part, heads_total=len(levels[0]))
+    yield state
+    results = {}
+    processed = 0
+    for height in range(9, -1, -1):
+        for point in levels[height]:
+            peaks, count = ({point}, 1) if height == 9 else (set(), 0)
+            if height != 9:
+                for target in neighbors(rows, point):
+                    if target in results and rows[target[1]][target[0]] == str(
+                        height + 1
+                    ):
+                        reachable, paths = results[target]
+                        peaks.update(reachable)
+                        count += paths
+            results[point] = frozenset(peaks), count
+            processed += 1
+            state = replace(state, current=point, height=height, processed=processed)
+            yield state
+    score = rating = 0
+    for index, head in enumerate(levels[0], 1):
+        peaks, count = results[head]
+        # Traverse each reachable cell once, rather than enumerating routes.
+        highlighted, pending = {head}, [head]
+        while pending:
+            point = pending.pop()
+            height = int(rows[point[1]][point[0]])
+            for target in neighbors(rows, point):
+                if (
+                    rows[target[1]][target[0]] == str(height + 1)
+                    and target not in highlighted
+                ):
+                    highlighted.add(target)
+                    pending.append(target)
+        head_score = len(peaks)
+        score += head_score
+        rating += count
+        state = replace(
+            state,
+            phase="trailhead",
+            current=head,
+            trailhead=head,
+            highlighted=frozenset(highlighted),
+            peaks=peaks,
+            head_score=head_score,
+            head_rating=count,
+            heads_done=index,
+            score=score,
+            rating=rating,
         )
+        yield state
+    yield replace(state, phase="complete")
 
-    padding_x, padding_y = get_padding_x_y()
 
-    for y in range(len(data)):
-        offset_x = 0
-        for x in range(len(data[0])):
-            # screen.print_at(
-            #     text=bc(text=" ", on_color=color_mapping[data[y][x]]).colored,
-            #     x=x + padding_x + x,
-            #     y=y + padding_y,
-            #     width=1
-            # )
-            screen.print_at(
-                text=bc(text=data[y][x]).colored,
-                x=x + padding_x + x,
-                y=y + padding_y,
-                width=1,
+def draw(state, buffer):
+    """Keep a boxed high-contrast cursor visible through counting and trail views."""
+    label(
+        buffer,
+        0,
+        2,
+        "Pink [n]: cursor | cyan: neighbors/routes | green: reachable peaks",
+        245,
+    )
+    rows = state.rows
+    width, height = len(rows[0]), len(rows)
+    # Reserve margins for row pointers, a column pointer and the detail footer.
+    area_w = max(0, buffer.width() - 4)
+    spacing = 2 if area_w >= 18 else 1
+    area_h = max(0, buffer.height() - 6)
+    visible_w = max(1, (area_w + spacing - 1) // spacing)
+    visible_h = max(1, area_h)
+    focus = state.current
+    camera = (
+        max(0, min(width - visible_w, focus[0] - visible_w // 2)),
+        max(0, min(height - visible_h, focus[1] - visible_h // 2)),
+    )
+    view = GridViewport(
+        buffer,
+        width,
+        height,
+        spacing=(spacing, 1),
+        camera=camera,
+        region=(2, 4, area_w, area_h),
+    )
+
+    def glyph(char, x, y):
+        point = x, y
+        if char == ".":
+            return ink(".", 235)
+        if point in state.peaks:
+            return ink(char, 46)
+        if point in state.highlighted:
+            return ink(char, 51)
+        if state.phase == "height wave":
+            adjacent = abs(x - focus[0]) + abs(y - focus[1]) == 1
+            if adjacent and char == str(state.height + 1):
+                return ink(char, 51)
+            return ink(char, 245 if int(char) >= state.height else 238)
+        return ink(char, 239)
+
+    view.draw(rows, glyph)
+    if state.processed:
+        x, y = view.to_screen(*focus)
+        if 2 <= x < 2 + area_w and 4 <= y < 4 + area_h:
+            char = rows[focus[1]][focus[0]]
+            buffer.put_char(x, y, f"\x1b[1;38;5;255;48;5;129m{char}\x1b[0m")
+            if spacing > 1:
+                buffer.put_char(x - 1, y, ink("[", 201))
+                buffer.put_char(x + 1, y, ink("]", 201))
+            buffer.put_char(x, 3, ink("v", 201))
+            buffer.put_char(0, y, ink(">", 201))
+            buffer.put_char(buffer.width() - 1, y, ink("<", 201))
+    if state.phase == "height wave":
+        detail = (
+            f"Cursor {focus}, height {state.height}: "
+            + (
+                "summit (1 ending route)"
+                if state.height == 9
+                else f"combine adjacent {state.height + 1}s"
             )
-            screen.print_at(text=" ", x=x + padding_x + x + 1, y=y + padding_y, width=1)
-            offset_x += 1
-
-    def update_found_tiles():
-        global found_tiles
-        for idx in range(len(found_tiles)):
-            found_tiles[idx]._tick()
-            found_tiles[idx].update()
-            screen.print_at(
-                text=found_tiles[idx].get_colored(),
-                x=found_tiles[idx].x,
-                y=found_tiles[idx].y,
-                width=1,
-            )
-        found_tiles = [tile for tile in found_tiles if tile.active]
-
-    def check_dir(value, x, y, dir, trail_head_id, placed_x, mode="part1"):
-        global found_tiles, paths_hit
-        ppx, ppy = get_padding_x_y()
-        dx, dy = x + dir[0], y + dir[1]
-        if 0 <= dy < len(data) and 0 <= dx < len(data[0]):
-            if data[dy][dx] != ".":
-                if int(data[dy][dx]) == int(value) + 1:
-                    if (dx, dy) not in tiles_traversed[trail_head_id]["seen_xy"]:
-                        tiles_traversed[trail_head_id]["seen_xy"].append((dx, dy))
-                        if data[dy][dx] == "9":
-                            screen.print_at(
-                                text=bc(text=" ", on_color=76).colored,
-                                x=dx + padding_x + dx,
-                                y=dy + padding_y,
-                                width=1,
-                            )
-                            tiles_traversed[trail_head_id]["trail_heads"] += 1
-                            # tiles_traversed[trail_head_id]["paths_found"] += 1
-                            paths_hit += 1
-                            return placed_x
-                        new_value = data[dy][dx]
-
-                        screen.print_at("┗", 0, screen.height - 1, 1)
-                        screen.print_at("┛", screen.width - 1, screen.height - 1, 1)
-                        screen.print_at("┓", screen.width - 1, 0, 1)
-                        screen.print_at("┏", 0, 0, 1)
-                        px, py = get_padding_x_y()
-                        # text = f"Total Valid Paths Score: {get_total_found_paths()}"
-                        text_nine_hit = f"Total Reachable Trail 9's Score: {paths_hit}"
-                        text_2 = f"┃Checking trailhead: {trail_head_id}"
-                        for xx in range(1, screen.width - 1):
-                            if xx > len(text_nine_hit) + 2:
-                                screen.print_at(text="━", x=xx, y=0, width=1)
-                        screen.print_at(
-                            text=f"┏{'━' * len(text_nine_hit)}┳",
-                            x=0,
-                            y=0,
-                            width=len(text_nine_hit) + 2,
-                        )
-                        screen.print_at(
-                            text=f"┃{text_nine_hit}┃",
-                            x=0,
-                            y=1,
-                            width=len(text_nine_hit) + 2,
-                        )
-                        screen.print_at(
-                            text=f"┣{'━' * len(text_nine_hit)}┛",
-                            x=0,
-                            y=2,
-                            width=len(text_nine_hit) + 2,
-                        )
-                        screen.print_at(text=text_2, x=0, y=3, width=len(text_2))
-                        screen.print_at(text="┃", x=0, y=4, width=1)
-                        screen.print_at(
-                            text="┃Trail Head Stats: <Trail Head Id>: <9's Reachable>",
-                            x=0,
-                            y=5,
-                            width=len(
-                                "┃Trail Head Stats: <Trail Head Id>: <9's Reachable>"
-                            ),
-                        )
-                        offset_y = 0
-                        offset_x = 0
-                        for idx, k in enumerate(tiles_traversed):
-                            if idx % (screen.height - 7) == 0 and idx != 0:
-                                offset_x += 1
-                                offset_y = 0
-                            if offset_x == 0:
-                                text_3 = f"┃{k[:4]}: {tiles_traversed[k]['trail_heads']: >1d}"
-                            else:
-                                text_3 = f" {k[:4]}: {tiles_traversed[k]['trail_heads']: >1d}"
-                            screen.print_at(
-                                text=text_3,
-                                x=offset_x * 8,
-                                y=6 + offset_y,
-                                width=len(text_3),
-                            )
-                            offset_y += 1
-                        seen_tiles = [tile.cords() for tile in found_tiles]
-                        if (x + px + x, y + py + y) not in seen_tiles:
-                            found_tiles.append(
-                                FoundTile(char=new_value, x=x + px + x, y=y + py)
-                            )
-                        # time.sleep(0.1)
-                        placed_x = check_dir(
-                            new_value, dx, dy, directions[0], trail_head_id, placed_x
-                        )
-                        placed_x = check_dir(
-                            new_value, dx, dy, directions[1], trail_head_id, placed_x
-                        )
-                        placed_x = check_dir(
-                            new_value, dx, dy, directions[2], trail_head_id, placed_x
-                        )
-                        placed_x = check_dir(
-                            new_value, dx, dy, directions[3], trail_head_id, placed_x
-                        )
-        else:
-            placed_x.append((dx + ppx + dx, dy + ppy))
-            screen.print_at(
-                text=bc(text="X", color="red", on_color=None).colored,
-                x=dx + ppx + dx,
-                y=dy + ppy,
-                width=1,
-            )
-        update_found_tiles()
-        return placed_x
-
-    trail_heads = find_all_trail_heads(data=data)
-
-    for trail_head in trail_heads:
-        placed_x = []
-        trail_head_id = str(uuid.uuid4())
-        tiles_traversed[trail_head_id] = {
-            "trail_heads": 0,
-            "paths_found": 0,
-            "seen_xy": [],
-            "color": random.randint(0, 231),
-        }
-        padding_x, padding_y = get_padding_x_y()
-        for yy in range(1, screen.height - 1):
-            if yy != 2:
-                screen.print_at(text="┃", x=0, y=yy, width=1)
-            screen.print_at(text="┃", x=screen.width - 1, y=yy, width=1)
-        for xx in range(1, screen.width - 1):
-            screen.print_at(text="━", x=xx, y=screen.height - 1, width=1)
-        found_tiles.append(
-            FoundTile(
-                char="0",
-                x=trail_head[0] + padding_x + trail_head[0],
-                y=trail_head[1] + padding_y,
-            )
+            if state.processed
+            else "Counting heights 9 -> 0, then highlighting each trailhead"
         )
-        placed_x = check_dir(
-            "0", trail_head[0], trail_head[1], directions[0], trail_head_id, placed_x
+    else:
+        detail = (
+            f"Trailhead {state.trailhead}: {state.head_score} distinct peaks / {state.head_rating} routes"
+            if state.trailhead is not None
+            else "No trailheads (0 cells) in this map"
         )
-        placed_x = check_dir(
-            "0", trail_head[0], trail_head[1], directions[1], trail_head_id, placed_x
-        )
-        placed_x = check_dir(
-            "0", trail_head[0], trail_head[1], directions[2], trail_head_id, placed_x
-        )
-        placed_x = check_dir(
-            "0", trail_head[0], trail_head[1], directions[3], trail_head_id, placed_x
-        )
-        for X in placed_x:
-            screen.print_at(" ", x=X[0], y=X[1], width=1)
-    while found_tiles:
-        update_found_tiles()
-    text_nine_hit = f"Total Reachable Trail 9's Score: {paths_hit}"
-    screen.print_at(text=f"┃{text_nine_hit}┃", x=0, y=1, width=len(text_nine_hit) + 2)
-    input()
+    if buffer.height() > 5:
+        label(buffer, 0, buffer.height() - 2, detail, 51)
+
+
+def describe(state):
+    return (
+        f"Cells: {state.processed} | Heads: {state.heads_done}/{state.heads_total} | "
+        f"Score: {state.score} | Rating: {state.rating} | Part {state.part}: {state.answer}"
+    )
+
+
+def main(argv=None):
+    parser = argument_parser(__doc__, __file__, "data", rate=12)
+    args = parser.parse_args(argv)
+    rows = load_input(parser, args, parse)
+    return run_animation(
+        snapshots(rows, args.part),
+        draw,
+        title=f"2024 Day 10 - Hoof It - Part {args.part}",
+        describe=describe,
+        **run_options(args),
+    )
 
 
 if __name__ == "__main__":
-    Screen.show(run)
+    main()

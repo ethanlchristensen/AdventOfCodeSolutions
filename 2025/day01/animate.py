@@ -1,594 +1,345 @@
-"""
-Advent of Code 2025 - Day 1 Animation
-Updated for bruhanimate 0.2.x
+"""Day 1 dial carousel using bruhanimate 1.x, with no import-time playback.
+
+Space/p pauses, n/right advances one visual sample, +/- changes speed, q quits.
+The original 0.2.x implementation is preserved in animate_legacy.py.
 """
 
-from typing import Optional
+from __future__ import annotations
 
-from bruhanimate import (
-    BaseEffect,
-    Buffer,
-    EffectRenderer,
-    FireworkEffect,
-    FireworkSettings,
-    Screen,
-    TwinkleSettings,
-    effect_registry,
-    text_to_image,
-)
+import argparse
+import math
+import re
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
+from functools import lru_cache
+from pathlib import Path
+
 from bruhcolor import bruhcolored
 
+from bruhanimate import (
+    Buffer,
+    CallbackEffect,
+    FireworkSettings,
+    Layer,
+    Playback,
+    Scene,
+    TwinkleSettings,
+    effect_registry,
+    play,
+    text_to_image,
+)
 
-class AdventOfCodeDay01Effect(BaseEffect):
-    def __init__(
-        self,
-        buffer: Buffer,
-        background: str,
-        part: str = "one",
-        data_file: str = "data",
-        effect_halt: int = 10,
-        second_effect: Optional[BaseEffect] = None,
-        second_effect_halt: int = 1,
-        min_transition_frames: int = 2,
-        max_transition_frames: int = 20,
-        accel_clicks: int = 10,
-        curve_intensity: int = 5,
-        blur_threshold: int = 3,
-        instruction_pause_frames: int = 10,
-        show_lines: bool = True,
-        exit_rotation_speed: int = 3,
-    ):
-        super().__init__(buffer, background)
-        self.part = part
-        self.data_file = data_file
-        self.effect_halt = effect_halt
-        self.second_effect = second_effect
-        self.second_effect_halt = second_effect_halt
-        self.min_transition_frames = min_transition_frames
-        self.max_transition_frames = max_transition_frames
-        self.accel_clicks = accel_clicks
-        self.blur_threshold = blur_threshold
-        self.instruction_pause_frames = instruction_pause_frames
-        self.show_lines = show_lines
-        self.exit_rotation_speed = exit_rotation_speed
-        self.line_char = "|"
-        self.number_images = [
-            [[c for c in row] for row in text_to_image(str(i), font="doom")]
-            for i in range(100)
-        ]
-        self.data = None
-        self.zeros = 0
-        self.position = 50
+SAMPLE_RATE = 60
+PALETTE = (196, 226, 46, 51, 201, 165, 129, 93)
 
-        # number arch curve
-        curve_intensity = max(1, min(10, curve_intensity))
-        self.curve_max_offset = 5 + (curve_intensity * 2)
-        self.curve_divisor = 6.0 - (curve_intensity * 0.35)
-        self.curve_exponent = 1.5 + (curve_intensity * 0.25)
 
-        # transition state tracking
-        self.target_position = 0
-        self.transition_progress = 0.0
-        self.is_transitioning = False
-        self.transition_direction = 1
-        self.transition_frames = max_transition_frames
+@dataclass(frozen=True)
+class Rotation:
+    direction: str
+    clicks: int
 
-        # instruction tracking
-        self.current_instruction_index = 0
-        self.current_instruction_clicks_remaining = 0
-        self.current_instruction_total_clicks = 0
-        self.current_instruction_direction = "R"
-        self.full_rotations_completed = 0
-        self.flash_frames_remaining = 0
 
-        # flash effect for 0 hits
-        self.flash_frames_remaining = 0
-        self.flash_color = 27
-        self.flash_duration = 30
+@dataclass(frozen=True)
+class Snapshot:
+    position: int = 50
+    motion: float = 0
+    instruction: int = 0
+    direction: str = "R"
+    remaining: int = 0
+    stops: int = 0
+    crossings: int = 0
+    tick: int = 0
+    flash_at: int = -SAMPLE_RATE
+    phase: str = "ready"
+    exit_progress: float = 0
 
-        # zeros counter flash effect
-        self.zeros_flash_frames_remaining = 0
-        self.zeros_flash_duration = 60
-        self.zeros_flash_colors = [196, 226, 46, 51, 201, 165, 129, 93]
 
-        # pause tracking
-        self.is_paused = False
-        self.pause_frames_remaining = 0
-        self.has_completed_instruction = False
-        self.has_paused_for_current_instruction = False
+def parse_rotations(text: str) -> tuple[Rotation, ...]:
+    """Parse nonempty input containing L/R followed by unsigned ASCII digits."""
+    lines = text.strip().splitlines()
+    if not lines:
+        raise ValueError("Input must contain at least one rotation")
+    rotations = []
+    for number, line in enumerate(lines, 1):
+        if not re.fullmatch(r"[LR][0-9]+", line.strip()):
+            raise ValueError(f"Line {number}: expected L or R followed by clicks")
+        rotations.append(Rotation(line.strip()[0], int(line.strip()[1:])))
+    return tuple(rotations)
 
-        # completion/exit state
-        self.all_instructions_completed = False
-        self.exit_direction = 1
-        self.exit_offset = 0
-        self.zeros_y_position = None
-        self.zeros_target_y = None
 
-        self._load_data()
+def solve(rotations: tuple[Rotation, ...]) -> tuple[int, int, int]:
+    """Return Part 1, Part 2 and final position in O(instructions) time.
 
-    def _load_data(self):
-        try:
-            with open(self.data_file, "r") as f:
-                self.data = f.read().strip().split("\n")
-        except FileNotFoundError:
-            # Fallback for testing if data file isn't present
-            self.data = ["R15", "L20", "R45", "L10"]
-
-    def _rotate(self, position, direction, clicks) -> tuple[int, bool]:
-        old_position = position
-        passed_through = False
-
-        if direction == "L":
-            position += -clicks
-        else:
-            position += clicks
-
-        if position < 0:
-            position = 100 + position
-            if position != 0 and old_position != 0:
-                passed_through = True
-        elif position > 99:
-            position = position - 100
-            if position != 0 and old_position != 0:
-                passed_through = True
-
-        return position, passed_through
-
-    def _get_moves(self, data: str) -> tuple[str, int, int, int]:
-        direction = data[0]
-        true_clicks = int(data[1:])
-        observed_clicks = true_clicks % 100
-        times_passed_zero = true_clicks // 100
-        return (direction, true_clicks, observed_clicks, times_passed_zero)
-
-    def _start_transition(self, target_pos: int, direction: int):
-        self.target_position = target_pos
-        self.is_transitioning = True
-        self.transition_progress = 0.0
-        self.transition_direction = direction
-        self.transition_frames = self._calculate_transition_frames()
-
-    def _calculate_transition_frames(self) -> int:
-        clicks_done = (
-            self.current_instruction_total_clicks
-            - self.current_instruction_clicks_remaining
+    Part 1 counts instruction endpoints at zero (including a zero-click stop).
+    Part 2 counts clicks arriving at zero; the initial position is never counted.
+    """
+    position, stops, crossings = 50, 0, 0
+    for rotation in rotations:
+        right = rotation.direction == "R"
+        crossings += (
+            (position + rotation.clicks) // 100
+            if right
+            else (rotation.clicks + (-position) % 100) // 100
         )
+        position = (position + rotation.clicks * (1 if right else -1)) % 100
+        stops += position == 0
+    return stops, crossings, position
 
-        if clicks_done < self.accel_clicks:
-            progress = clicks_done / self.accel_clicks
-            base_frames = int(
-                self.max_transition_frames
-                - (self.max_transition_frames - self.min_transition_frames) * progress
-            )
-        elif self.current_instruction_clicks_remaining <= self.accel_clicks:
-            progress = self.current_instruction_clicks_remaining / self.accel_clicks
-            base_frames = int(
-                self.max_transition_frames
-                - (self.max_transition_frames - self.min_transition_frames) * progress
-            )
-        else:
-            base_frames = self.min_transition_frames
 
-        target = self.target_position
-        distance_to_zero = min(target, 100 - target)
+def dial_states(rotations: tuple[Rotation, ...], part: int = 2) -> Iterator[Snapshot]:
+    """Yield bounded immutable visual samples lazily, at a nominal 60 samples/s.
 
-        proximity_threshold = 5
-        if distance_to_zero < proximity_threshold:
-            proximity_factor = distance_to_zero / proximity_threshold
-            proximity_slowdown = int(
-                self.max_transition_frames * (1 - proximity_factor * 0.7)
-            )
-
-            return max(base_frames, proximity_slowdown)
-
-        return base_frames
-
-    def _draw_line(
-        self, x1: int, y1: int, x2: int, y2: int, char: Optional[str] = None
-    ):
-        if char is None:
-            char = self.line_char
-
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
-
-        sx = 1 if x1 < x2 else -1
-        sy = 1 if y1 < y2 else -1
-
-        err = dx - dy
-
-        x, y = x1, y1
-
-        while True:
-            if 0 <= x < self.buffer.width() and 0 <= y < self.buffer.height():
-                if abs(dx) > abs(dy):
-                    line_char = "─"
-                elif abs(dy) > abs(dx):
-                    line_char = "│"
-                else:
-                    line_char = "/" if (sx * sy) > 0 else "\\"
-
-                colored = bruhcolored(line_char, 240).colored
-                self.buffer.put_char(x, y, colored)
-
-            if x == x2 and y == y2:
-                break
-
-            e2 = 2 * err
-
-            if e2 > -dy:
-                err -= dy
-                x += sx
-
-            if e2 < dx:
-                err += dx
-                y += sy
-
-    def _trigger_flash(self):
-        self.flash_frames_remaining = self.flash_duration
-
-    def _render_flash(self):
-        if self.flash_frames_remaining <= 0:
-            return
-
-        intensity = self.flash_frames_remaining / self.flash_duration
-
-        flash_char = "."
-        for y in range(self.buffer.height()):
-            for x in range(self.buffer.width()):
-                if (x + y) % 2 == 0 and intensity > 0.3:
-                    colored = bruhcolored(flash_char, self.flash_color).colored
-                    self.buffer.put_char(x, y, colored)
-
-    def _trigger_zeros_flash(self):
-        self.zeros_flash_frames_remaining = self.zeros_flash_duration
-
-    def get_zero_count_image(self):
-        image = text_to_image(str(self.zeros), font="doom")
-
-        if self.zeros_flash_frames_remaining > 0:
-            colored_image = []
-            for y, row in enumerate(image):
-                colored_row = []
-                for x, char in enumerate(row):
-                    if char.strip():
-                        color_index = (x + y) % len(self.zeros_flash_colors)
-                        color_offset = (
-                            self.zeros_flash_duration
-                            - self.zeros_flash_frames_remaining
-                        ) // 3
-                        final_color_index = (color_index + color_offset) % len(
-                            self.zeros_flash_colors
-                        )
-                        color = self.zeros_flash_colors[final_color_index]
-                        colored_row.append(bruhcolored(char, color).colored)
-                    else:
-                        colored_row.append(char)
-                colored_image.append(colored_row)
-            return colored_image
-
-        return image
-
-    def get_current_position_image(self, position):
-        pos = position % 100
-        image = self.number_images[pos]
-        if pos == 0:
-            colored_image = []
-            for y in range(len(image)):
-                colored_row = []
-                for x in range(len(image[0])):
-                    colored_row.append(bruhcolored(image[y][x], 129).colored)
-                colored_image.append(colored_row)
-            return colored_image
-        return image
-
-    def get_current_instruction_image(self):
-        return text_to_image(
-            f"{self.current_instruction_direction} {self.current_instruction_clicks_remaining}",
-            font="doom",
+    Clicks ease between neighboring numbers over 2-12 samples. Longer turns
+    accelerate, then slow near zero and at the ends. Drawing never advances time.
+    Instruction pauses last 0.2 s; the finite exit lasts 1 s at normal speed.
+    Storage stays constant with respect to total clicks; no trace is materialized.
+    """
+    if part not in (1, 2):
+        raise ValueError("part must be 1 or 2")
+    state = Snapshot()
+    yield state
+    for number, rotation in enumerate(rotations, 1):
+        direction = 1 if rotation.direction == "R" else -1
+        state = replace(
+            state,
+            instruction=number,
+            direction=rotation.direction,
+            remaining=rotation.clicks,
+            phase="turning",
         )
-
-    def place_instruction_image(self):
-        image = self.get_current_instruction_image()
-        for y, line in enumerate(image):
-            self.buffer.put_at_center(y, line)
-
-    def draw_lines_to_numbers(self):
-        if not self.show_lines:
-            return
-
-        center_y = self.buffer.height() // 2
-        center_x = self.buffer.width() // 2
-        bottom_y = self.buffer.height() - 1
-        bottom_x = center_x
-
-        horizontal_spacing = 15
-
-        transition_offset = 0.0
-        if self.is_transitioning:
-            t = self.transition_progress
-            eased_t = t * t * (3.0 - 2.0 * t)
-            transition_offset = eased_t * self.transition_direction
-
-        for offset in range(-10, 11):
-            visual_offset = offset - transition_offset
-            pos = (self.position + offset) % 100
-
-            abs_offset = abs(visual_offset)
-            normalized_offset = abs_offset / self.curve_divisor
-            vertical_offset = int(
-                normalized_offset**self.curve_exponent * self.curve_max_offset
-            )
-
-            number_x = center_x + int(visual_offset * horizontal_spacing)
-            number_y = center_y + vertical_offset
-
-            if number_x < 0 or number_x >= self.buffer.width():
-                continue
-
-            self._draw_line(bottom_x, bottom_y, number_x, number_y)
-
-    def place_zeros_counter_image(self):
-        image = self.get_zero_count_image()
-
-        if self.zeros_y_position is None:
-            self.zeros_y_position = self.buffer.height() - len(image)
-
-        if self.all_instructions_completed and self.zeros_target_y is None:
-            if abs(self.exit_offset) > 12:
-                self.zeros_target_y = (self.buffer.height() - len(image)) // 2
-
-        if self.zeros_target_y is not None:
-            if abs(self.zeros_y_position - self.zeros_target_y) > 0.5:
-                self.zeros_y_position += (
-                    self.zeros_target_y - self.zeros_y_position
-                ) * 0.1
-            else:
-                self.zeros_y_position = self.zeros_target_y
-
-        for y, line in enumerate(image):
-            row = int(self.zeros_y_position) + y
-            if 0 <= row < self.buffer.height():
-                self.buffer.put_at_center(row, line)
-
-    def place_current_position_with_neighbors(self):
-        center_y = self.buffer.height() // 2
-        center_x = self.buffer.width() // 2
-
-        horizontal_spacing = 15
-
-        transition_offset = 0.0
-        if self.is_transitioning:
-            t = self.transition_progress
-            eased_t = t * t * (3.0 - 2.0 * t)
-            transition_offset = eased_t * self.transition_direction
-
-        if self.all_instructions_completed:
-            transition_offset += self.exit_offset
-
-        blur_intensity = 0
-        if self.transition_frames <= self.blur_threshold:
-            blur_intensity = 1.0 - (self.transition_frames / self.blur_threshold)
-
-        positions_to_show = []
-        for offset in range(-10, 11):
-            visual_offset = offset - transition_offset
-            pos = (self.position + offset) % 100
-            positions_to_show.append((pos, visual_offset))
-
-        for pos, visual_offset in positions_to_show:
-            image = self.get_current_position_image(pos)
-            if image is None:
-                continue
-
-            image_height = len(image)
-            image_width = len(image[0])
-
-            x_pos = (
-                center_x + int(visual_offset * horizontal_spacing) - image_width // 2
-            )
-
-            if x_pos + image_width < 0 or x_pos >= self.buffer.width():
-                continue
-
-            abs_offset = abs(visual_offset)
-            normalized_offset = abs_offset / self.curve_divisor
-            vertical_offset = int(
-                normalized_offset**self.curve_exponent * self.curve_max_offset
-            )
-
-            y_pos = center_y - image_height // 2 + vertical_offset
-
-            for i, line in enumerate(image):
-                row = y_pos + i
-
-                if row < 0 or row >= self.buffer.height():
-                    continue
-
-                line_start = max(0, -x_pos)
-                line_end = min(len(line), self.buffer.width() - x_pos)
-                buffer_col = max(0, x_pos)
-
-                if line_start < line_end:
-                    clipped_line = line[line_start:line_end]
-
-                    if blur_intensity > 0 and visual_offset != 0:
-                        distance_factor = min(abs(visual_offset) / 3.0, 1.0)
-                        effective_blur = blur_intensity * distance_factor
-
-                        if effective_blur > 0.7:
-                            clipped_line = [
-                                c if i % 3 == 0 else "·"
-                                for i, c in enumerate(clipped_line)
-                            ]
-                        elif effective_blur > 0.4:
-                            clipped_line = [
-                                c if i % 2 == 0 else "·"
-                                for i, c in enumerate(clipped_line)
-                            ]
-                        elif effective_blur > 0.2:
-                            clipped_line = [
-                                c if i % 3 != 1 else "·"
-                                for i, c in enumerate(clipped_line)
-                            ]
-
-                    self.buffer.put_at(buffer_col, row, clipped_line)
-
-    def render_frame(self, frame_number: int):
-        if frame_number % self.second_effect_halt == 0:
-            if self.second_effect is not None:
-                self.second_effect.render_frame(frame_number=frame_number)
-                self.buffer.sync_with(self.second_effect.buffer)
-
-        if self.flash_frames_remaining > 0:
-            self.flash_frames_remaining -= 1
-
-        if self.zeros_flash_frames_remaining > 0:
-            self.zeros_flash_frames_remaining -= 1
-
-        if self.all_instructions_completed:
-            self.exit_offset += self.exit_direction * 0.5
-
-            self._render_flash()
-            self.draw_lines_to_numbers()
-            self.place_current_position_with_neighbors()
-            self.place_zeros_counter_image()
-            return
-
-        if self.is_paused:
-            self.pause_frames_remaining -= 1
-            if self.pause_frames_remaining <= 0:
-                self.is_paused = False
-                self.has_paused_for_current_instruction = True
-            self._render_flash()
-            self.draw_lines_to_numbers()
-            self.place_current_position_with_neighbors()
-            self.place_zeros_counter_image()
-            return
-
-        if self.is_transitioning:
-            self.transition_progress += 1.0 / self.transition_frames
-
-            if self.transition_progress >= 1.0:
-                self.position = self.target_position
-                self.is_transitioning = False
-                self.transition_progress = 0.0
-                self.current_instruction_clicks_remaining -= 1
-        else:
-            if self.current_instruction_clicks_remaining <= 0:
-                if (
-                    self.has_completed_instruction
-                    and self.instruction_pause_frames > 0
-                    and not self.has_paused_for_current_instruction
-                ):
-                    self.is_paused = True
-                    self.pause_frames_remaining = self.instruction_pause_frames
-                    self._render_flash()
-                    self.draw_lines_to_numbers()
-                    self.place_current_position_with_neighbors()
-                    self.place_zeros_counter_image()
-                    return
-
-                if self.data is None or self.current_instruction_index >= len(
-                    self.data
-                ):
-                    self.all_instructions_completed = True
-                    if self.position < 50:
-                        self.exit_direction = -1
-                    else:
-                        self.exit_direction = 1
-                    return
-
-                direction, true_clicks, observed_clicks, times_passed_through_zero = (
-                    self._get_moves(self.data[self.current_instruction_index])
+        for click in range(rotation.clicks):
+            target = (state.position + direction) % 100
+            ramp = min(click, rotation.clicks - click - 1, 3) / 3
+            samples = max(2, round(12 - 10 * ramp))
+            if min(target, 100 - target) < 5:
+                samples = max(samples, 12 - 2 * min(target, 100 - target))
+            origin = state.position
+            for sample in range(1, samples + 1):
+                tick = state.tick + 1
+                arrived = sample == samples
+                hit = arrived and target == 0
+                stop = hit and click == rotation.clicks - 1
+                progress = sample / samples
+                eased = progress * progress * (3 - 2 * progress)
+                state = replace(
+                    state,
+                    position=target if arrived else origin,
+                    motion=0 if arrived else direction * eased,
+                    remaining=rotation.clicks - click - int(arrived),
+                    stops=state.stops + stop,
+                    crossings=state.crossings + hit,
+                    tick=tick,
+                    flash_at=tick if (stop if part == 1 else hit) else state.flash_at,
                 )
-
-                self.current_instruction_direction = direction
-                self.current_instruction_clicks_remaining = true_clicks
-                self.current_instruction_total_clicks = true_clicks
-                self.full_rotations_completed = 0
-                self.current_instruction_index += 1
-                self.has_completed_instruction = True
-                self.has_paused_for_current_instruction = False
-
-            if self.current_instruction_clicks_remaining > 0:
-                if self.current_instruction_direction == "L":
-                    target = (self.position - 1) % 100
-                    dir_value = -1
-                else:
-                    target = (self.position + 1) % 100
-                    dir_value = 1
-
-                if target == 0 and self.position != 0:
-                    self.zeros += 1
-                    self._trigger_zeros_flash()
-
-                self._start_transition(target, dir_value)
-
-        self._render_flash()
-        self.draw_lines_to_numbers()
-        self.place_current_position_with_neighbors()
-        self.place_zeros_counter_image()
-        self.place_instruction_image()
+                yield state
+        if rotation.clicks == 0:
+            stop = state.position == 0
+            state = replace(
+                state,
+                stops=state.stops + stop,
+                flash_at=state.tick if part == 1 and stop else state.flash_at,
+            )
+        for _ in range(round(0.2 * SAMPLE_RATE)):
+            state = replace(state, tick=state.tick + 1, phase="pause")
+            yield state
+    for sample in range(1, SAMPLE_RATE + 1):
+        state = replace(
+            state,
+            tick=state.tick + 1,
+            exit_progress=sample / SAMPLE_RATE,
+            phase="complete" if sample == SAMPLE_RATE else "finishing",
+        )
+        yield state
 
 
-def animate(screen: Screen):
-    # Initialize the main renderer
-    renderer = EffectRenderer(
-        screen=screen,
-        frames=float("inf"),
-        frame_time=0.01,
-        effect_type="static",
-        background=" ",
-        transparent=False,
+@lru_cache(maxsize=128)
+def art(text: str) -> tuple[str, ...]:
+    """Cache immutable doom-font rows, bounded even as counters grow."""
+    return tuple(text_to_image(text, font="doom"))
+
+
+def stamp(buffer: Buffer, rows: tuple[str, ...], x: int, y: int, color=None):
+    """Clip transparent ASCII art without painting over background spaces."""
+    for dy, row in enumerate(rows):
+        if not 0 <= y + dy < buffer.height():
+            continue
+        for dx, char in enumerate(row):
+            if char != " " and 0 <= x + dx < buffer.width():
+                value = bruhcolored(char, color=color).colored if color else char
+                buffer.put_char(x + dx, y + dy, value)
+
+
+def guide(buffer: Buffer, x: int, y: int):
+    """Draw a clipped radial guide from the bottom center to a dial number."""
+    origin_x, origin_y = buffer.width() // 2, buffer.height() - 2
+    length = max(abs(x - origin_x), abs(y - origin_y), 1)
+    char = "│" if abs(x - origin_x) < abs(y - origin_y) else "─"
+    for step in range(length + 1):
+        px = round(origin_x + (x - origin_x) * step / length)
+        py = round(origin_y + (y - origin_y) * step / length)
+        if 0 <= px < buffer.width() and 0 <= py < buffer.height():
+            buffer.put_char(px, py, bruhcolored(char, color=240).colored)
+
+
+def draw_dial(state: Snapshot, buffer: Buffer, *, part=2, show_lines=False):
+    """Render a snapshot; compact terminals use a readable single-line dial."""
+    width, height = buffer.width(), buffer.height()
+    center_x, center_y = width // 2, height // 2
+    count = state.stops if part == 1 else state.crossings
+    flash_age = state.tick - state.flash_at
+    color = PALETTE[(flash_age // 4) % len(PALETTE)] if flash_age < 60 else 51
+    if width < 45 or height < 20:
+        buffer.put_at(0, center_y, f"Dial: {state.position:02d}  Zeros: {count}")
+        return
+    exit_ease = state.exit_progress**2 * (3 - 2 * state.exit_progress)
+    exit_offset = exit_ease * 22 * (-1 if state.position < 50 else 1)
+    if state.exit_progress < 1:
+        placements = []
+        for offset in range(-10, 11):
+            visual_offset = offset - state.motion + exit_offset
+            rows = art(str((state.position + offset) % 100))
+            x = round(center_x + visual_offset * 15 - len(rows[0]) / 2)
+            y = round(center_y - len(rows) / 2 + (abs(visual_offset) / 3.9) ** 3 * 17)
+            if x + len(rows[0]) <= 0 or x >= width or y >= height:
+                continue
+            placements.append(
+                (rows, x, y, 129 if (state.position + offset) % 100 == 0 else None)
+            )
+        if show_lines:
+            for rows, x, y, _ in placements:
+                guide(buffer, x + len(rows[0]) // 2, y + len(rows))
+        for rows, x, y, number_color in placements:
+            stamp(buffer, rows, x, y, number_color)
+    if state.phase not in ("finishing", "complete"):
+        rows = art(f"{state.direction} {state.remaining}")
+        stamp(buffer, rows, (width - len(rows[0])) // 2, 2)
+    rows = art(str(count))
+    bottom = height - len(rows) - 2
+    target = (height - len(rows)) // 2
+    stamp(
+        buffer,
+        rows,
+        (width - len(rows[0])) // 2,
+        round(bottom + (target - bottom) * exit_ease),
+        color,
     )
 
-    # Use effect_registry and settings for background effects
-    # 1. Create Twinkle
-    twinkle = effect_registry.create(
-        "twinkle",
-        Buffer(screen.height, screen.width),
-        " ",
-        settings=TwinkleSettings(density=0.05),
-    )
 
-    # 2. Create Firework and link Twinkle as second effect
-    fireworks = effect_registry.create(
-        "firework",
-        Buffer(screen.height, screen.width),
-        " ",
-        settings=FireworkSettings(
-            firework_type="random", color_enabled=True, color_type="twotone", rate=0.05
+def run(
+    rotations,
+    *,
+    part=2,
+    speed=1.0,
+    fps=60,
+    frames=None,
+    background=True,
+    show_lines=False,
+    on_complete="hold",
+):
+    """Compose independent background layers and a lazy dial Playback."""
+    if part not in (1, 2):
+        raise ValueError("part must be 1 or 2")
+    totals = solve(rotations)
+    if not math.isfinite(speed) or not 0 < speed <= 4:
+        raise ValueError("speed must be greater than 0 and at most 4")
+    playback = Playback(
+        dial_states(rotations, part),
+        lambda state, buffer: draw_dial(
+            state, buffer, part=part, show_lines=show_lines
         ),
-    )
-    # FireworkEffect still supports set_second_effect manually
-    if isinstance(fireworks, FireworkEffect):
-        fireworks.set_second_effect(twinkle)
-
-    # Note: Snow and Plasma were created but not used in the original final effect assignment.
-    # We'll stick to the logic of the original script.
-
-    # 3. Create the main custom effect
-    main_effect = AdventOfCodeDay01Effect(
-        buffer=Buffer(screen.height, screen.width),
-        background=" ",
-        part="two",
-        data_file="data1",
-        second_effect=fireworks,
-        second_effect_halt=3,
-        min_transition_frames=2,
-        max_transition_frames=20,
-        accel_clicks=3,
-        curve_intensity=6,
-        blur_threshold=3,
-        instruction_pause_frames=20,
-        show_lines=False,
-        exit_rotation_speed=2,
+        steps_per_second=SAMPLE_RATE * speed,
     )
 
-    renderer.effect = main_effect
-    renderer.run()
+    def status(buffer):
+        state = playback.state
+        phase = (
+            "Paused" if playback.paused else state.phase.title() if state else "Ready"
+        )
+        buffer.put_at(
+            0, 0, f"Day 1 | Part {part} | {phase} | Answer: {totals[part - 1]}"
+        )
+        buffer.put_at(
+            0, buffer.height() - 1, "Space pause | n/right sample | +/- speed | q quit"
+        )
+
+    def build(buffer):
+        layers = []
+        if background:
+            layers.extend(
+                (
+                    effect_registry.create(
+                        "twinkle",
+                        Buffer(buffer.height(), buffer.width()),
+                        " ",
+                        settings=TwinkleSettings(density=0.05),
+                    ),
+                    Layer(
+                        effect_registry.create(
+                            "firework",
+                            buffer,
+                            " ",
+                            settings=FireworkSettings(
+                                firework_type="random",
+                                color_enabled=True,
+                                color_type="twotone",
+                                rate=0.02,
+                            ),
+                        ),
+                        transparent=True,
+                    ),
+                )
+            )
+        return Scene(*layers, playback, CallbackEffect(status))
+
+    return play(
+        effect_factory=build,
+        fps=fps,
+        updates_per_second=SAMPLE_RATE,
+        frames=frames,
+        on_complete=on_complete,
+        event_handler=playback.handle_event,
+    )
 
 
-if __name__ in ["__main__", "day01_animate"]:
-    Screen.show(animate)
+def positive_number(value):
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("Value must be positive and finite")
+    return number
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--input", type=Path, default=Path(__file__).resolve().with_name("data1")
+    )
+    parser.add_argument("--part", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--speed", type=positive_number, default=1)
+    parser.add_argument("--fps", type=positive_number, default=60)
+    parser.add_argument("--frames", type=int)
+    parser.add_argument("--no-background", action="store_true")
+    parser.add_argument("--show-lines", action="store_true")
+    parser.add_argument("--exit-on-complete", action="store_true")
+    args = parser.parse_args(argv)
+    if args.frames is not None and args.frames < 0:
+        parser.error("--frames must not be negative")
+    if args.speed > 4:
+        parser.error("--speed must be at most 4")
+    try:
+        rotations = parse_rotations(args.input.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+    return run(
+        rotations,
+        part=args.part,
+        speed=args.speed,
+        fps=args.fps,
+        frames=args.frames,
+        background=not args.no_background,
+        show_lines=args.show_lines,
+        on_complete="exit" if args.exit_on_complete else "hold",
+    )
+
+
+if __name__ == "__main__":
+    main()

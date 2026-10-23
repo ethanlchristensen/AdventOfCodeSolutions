@@ -1,750 +1,433 @@
-"""
-Advent of Code 2025 - Day 7 Animation
-Updated for bruhanimate 0.2.x
+"""Day 7 beam animation using bruhanimate 1.x; imports never start playback.
+
+Run directly or through cli.py. Space pauses, n/right steps, +/- changes speed,
+and q exits. Branch traces are sampled lazily; totals use dynamic programming.
+The original implementation is retained in animate_legacy.py.
 """
 
+from __future__ import annotations
+
+import argparse
 import math
-import random
-from typing import Optional
+from collections import Counter
+from collections.abc import Iterator
+from dataclasses import dataclass
+from itertools import islice
+from pathlib import Path
 
 from bruhanimate import (
-    BaseEffect,
     Buffer,
-    EffectRenderer,
-    FireworkEffect,
+    CallbackEffect,
     FireworkSettings,
-    Screen,
-    TWINKLE_SPEC,
+    GridViewport,
+    Layer,
+    Playback,
+    Scene,
     TwinkleSettings,
     effect_registry,
+    play,
 )
-from bruhcolor import bruhcolored as bc
+from bruhcolor import bruhcolored
+
+Point = tuple[int, int]
+Edge = tuple[Point, Point]
+Board = tuple[str, ...]
+PALETTE = (196, 208, 190, 76, 21, 93)
+# North/east/south/west bit masks produce junctions without direction bookkeeping.
+GLYPHS = {
+    1: "║",
+    2: "═",
+    4: "║",
+    8: "═",
+    5: "║",
+    10: "═",
+    3: "╚",
+    9: "╝",
+    6: "╔",
+    12: "╗",
+    7: "╠",
+    13: "╣",
+    11: "╩",
+    14: "╦",
+    15: "╬",
+}
 
 
-class AdventOfCodeDay07Effect(BaseEffect):
-    def __init__(
-        self,
-        buffer: Buffer,
-        background: str,
-        part: str = "one",
-        data_file: str = "data",
-        second_effect: Optional[BaseEffect] = None,
-        second_effect_halt: int = 1,
-        effect_halt: int = 1,
-        board_spacing: int = 1,
-        branch_mode: bool = False,
-        twinkle_update_frames: int = 1,
-        pulse_speed: int = 1,
-        pulse_length: int = 5,
-        max_radius: float = 20,
-    ):
-        super().__init__(buffer, background)
-        self.part = part
-        self.data_file = data_file
-        self.second_effect = second_effect
-        self.second_effect_halt = second_effect_halt
-        self.effect_halt = effect_halt
-        self.board_spacing = board_spacing
-        self.branch_mode = branch_mode
-        self.twinkle_update_frames = twinkle_update_frames
-        self.pulse_speed = pulse_speed
-        self.pulse_length = pulse_length
-        self.max_radius = max_radius
+@dataclass(frozen=True)
+class Totals:
+    splitters: int
+    timelines: int
 
-        self.data = None
-        self.board_width = None
-        self.board_height = None
-        self.px = None
-        self.py = None
-        self.x = None
-        self.y = None
 
-        self.changes = set()
-        self.board_positions = set()
-        self.virtual_beam_positions = set()
-        self.ripple_effects = []
-        self.last_ripple_positions = set()
+@dataclass(frozen=True)
+class Snapshot:
+    path: tuple[Point, ...] = ()
+    completed: frozenset[Edge] = frozenset()
+    branch: int = 0
+    pulse: int | None = None
+    phase: str = "building"
+    tick: int = 0
 
-        self.ripple_chars = [" ", ".", "·", ":", "-", "=", "+", "*", "#", "▒", "▓", "█"]
-        self.beam_char = "║"
-        self.beam_left_char = "╔"
-        self.beam_right_char = "╗"
-        self.beam_horizontal_char = "═"
-        self.splitter_char = "✦"
-        self.splitter_left_char = "═"
-        self.splitter_right_char = "╚"
-        self.splitter_normal_colors = [196, 208, 190, 76, 21, 93]
-        self.beam_color = 45
-        self.pulse_color = 45
-        self.evergreen_color = 28  # Green color for completed beams
 
-        self.all_branches = []
-        self.current_branch_index = 0
-        self.current_branch_step = 0
-        self.current_branch_path = []
+def parse_board(text: str) -> Board:
+    """Validate one top-row S and a nonempty rectangular .^S board."""
+    board = tuple(text.strip().splitlines())
+    if not board or not board[0] or any(len(row) != len(board[0]) for row in board):
+        raise ValueError("Input must be a nonempty rectangular board")
+    if any(cell not in ".^S" for row in board for cell in row):
+        raise ValueError("Input may contain only '.', '^', and 'S'")
+    if sum(row.count("S") for row in board) != 1 or "S" not in board[0]:
+        raise ValueError("Input must contain exactly one S in the top row")
+    return board
 
-        self.twinkles = {}
-        self.twinkle_frame_counter = 0
 
-        self.path_directions = {}
-        self.splitter_connections = {}
-        self.connector_lines = {}
-        self.connector_positions = set()
+def next_steps(board: Board, point: Point) -> tuple[tuple[Point, ...], ...]:
+    """Return each next route suffix, including entry into a splitter."""
+    x, y = point
+    if y + 1 == len(board):
+        return ()
+    below = (x, y + 1)
+    if board[y + 1][x] == "^":
+        return tuple(
+            (below, (nx, y + 1)) for nx in (x - 1, x + 1) if 0 <= nx < len(board[0])
+        )
+    return ((below,),)
 
-        self.state = "building"
-        self.pulse_position = 0
-        self.pulse_frame_counter = 0
-        self.pulse_direction = 1
 
-        self.erased_positions = set()
-        self.erased_virtual_positions = set()
-        self.erased_connector_positions = set()
+def count_timelines(board: Board) -> Totals:
+    """Count all timelines with one row of integer counts, without path traces."""
+    counts = Counter({board[0].index("S"): 1})
+    splitters = 0
+    for y in range(len(board) - 1):
+        following = Counter()
+        for x, count in counts.items():
+            splitters += board[y + 1][x] == "^"
+            for suffix in next_steps(board, (x, y)):
+                following[suffix[-1][0]] += count
+        counts = following
+    return Totals(splitters, sum(counts.values()))
 
-        self.splitter_colors = {}  # Store permanent colors for each splitter
-        self.completed_beam_positions = set()  # Beams that should be evergreen
-        self.completed_path_directions = {}  # Store directions for completed beams
-        self.completed_connector_lines = {}  # Store connector lines for completed beams
 
-        self._load_data()
-
-    def _load_data(self):
-        try:
-            with open(self.data_file, "r") as f:
-                self.data = [[c for c in r] for r in f.read().strip().split("\n")]
-        except FileNotFoundError:
-            # Fallback for testing if the data file is missing
-            self.data = [
-                list("....S...."),
-                list("........."),
-                list("...^.^..."),
-                list("........."),
-                list("..^...^.."),
-                list("........."),
-            ]
-
-        self.board_width = len(self.data[0])
-        self.board_height = len(self.data)
-        self.paths = [[0] * self.board_width for _ in range(self.board_height)]
-        self.px = (self.buffer.width() - (self.board_width * self.board_spacing)) // 2
-        self.py = (self.buffer.height() - self.board_height) // 2
-
-        for y in range(self.board_height):
-            for x in range(self.board_width):
-                if self.data[y][x] == "^":
-                    # Assign permanent color to splitter
-                    self.splitter_colors[(x, y)] = random.choice(
-                        self.splitter_normal_colors
-                    )
-                elif self.data[y][x] == ".":
-                    ui_x = self.px + (self.board_spacing * x)
-                    ui_y = y + self.py
-                    self.twinkles[(ui_x, ui_y)] = TWINKLE_SPEC(
-                        char="·", value=random.randint(0, 23)
-                    )
-
-        if self.branch_mode:
-            try:
-                start_x = self.data[0].index("S")
-            except ValueError:
-                start_x = self.board_width // 2
-            self._precompute_branches_extended(start_x, 0)
+def iter_branches(board: Board) -> Iterator[tuple[Point, ...]]:
+    """Depth-first routes; retain pending branches rather than every timeline."""
+    pending = [((board[0].index("S"), 0),)]
+    while pending:
+        path = pending.pop()
+        if path[-1][1] == len(board) - 1:
+            yield path
         else:
-            try:
-                self.x = self.data[0].index("S")
-            except ValueError:
-                self.x = self.board_width // 2
-            self.y = 0
-            self.paths[self.y][self.x] = 1
-
-    def _precompute_branches_extended(self, start_x, start_y):
-        branches_to_process = [[(start_x, start_y)]]
-
-        while branches_to_process:
-            path = branches_to_process.pop(0)
-            x, y = path[-1]
-
-            if y + 1 >= self.board_height:
-                self.all_branches.append(path)
-                continue
-
-            cell_below = self.data[y + 1][x]
-
-            if cell_below == ".":
-                new_path = path + [(x, y + 1)]
-                branches_to_process.append(new_path)
-            elif cell_below == "^":
-                if x - 1 >= 0:
-                    left_path = path + [(x, y + 1), (x - 1, y + 1)]
-                    branches_to_process.append(left_path)
-                if x + 1 < self.board_width:
-                    right_path = path + [(x, y + 1), (x + 1, y + 1)]
-                    branches_to_process.append(right_path)
-            else:
-                self.all_branches.append(path)
-
-        for i, branch in enumerate(self.all_branches):
-            extended_branch = []
-
-            start_x_board = branch[0][0]
-            ui_start_x = self.px + (self.board_spacing * start_x_board)
-
-            for screen_y in range(0, self.py):
-                extended_branch.append(("virtual_top", screen_y, ui_start_x))
-
-            for board_x, board_y in branch:
-                extended_branch.append((board_x, board_y, None))
-
-            end_x_board = branch[-1][0]
-            ui_end_x = self.px + (self.board_spacing * end_x_board)
-
-            for screen_y in range(self.py + self.board_height, self.buffer.height()):
-                extended_branch.append(("virtual_bottom", screen_y, ui_end_x))
-
-            self.all_branches[i] = extended_branch
-
-    def update_twinkles(self):
-        if self.twinkle_frame_counter % self.twinkle_update_frames != 0:
-            self.twinkle_frame_counter += 1
-            return
-
-        for (x, y), twinkle in self.twinkles.items():
-            twinkle.next()
-
-        self.twinkle_frame_counter += 1
-
-    def update_board_row_mode(self, frame_number: int):
-        if self.x >= self.board_width:
-            self.x = 0
-            self.y += 1
-
-        if self.y >= self.board_height:
-            return
-
-        current_paths = self.paths[self.y][self.x]
-        if current_paths == 0:
-            self.x += 1
-            return
-
-        if self.y + 1 < self.board_height:
-            cell_below = self.data[self.y + 1][self.x]
-
-            if cell_below == ".":
-                self.paths[self.y + 1][self.x] += current_paths
-                self.path_directions[(self.x, self.y + 1)] = "straight"
-            elif cell_below == "^":
-                ui_x = self.px + (self.board_spacing * self.x)
-                ui_y = (self.y + 1) + self.py
-                self.ripple_effects.append(
-                    {
-                        "x": ui_x,
-                        "y": ui_y,
-                        "radius": 0,
-                        "max_radius": self.max_radius,
-                        "frame": frame_number,
-                    }
-                )
-
-                if self.x - 1 >= 0:
-                    self.paths[self.y + 1][self.x - 1] += current_paths
-                    self.path_directions[(self.x - 1, self.y + 1)] = "left"
-                    if self.board_spacing > 1:
-                        self.connector_lines[(self.x, self.y + 1, "left")] = True
-
-                if self.x + 1 < self.board_width:
-                    self.paths[self.y + 1][self.x + 1] += current_paths
-                    self.path_directions[(self.x + 1, self.y + 1)] = "right"
-                    if self.board_spacing > 1:
-                        self.connector_lines[(self.x, self.y + 1, "right")] = True
-
-        self.x += 1
-
-    def update_board_branch_mode(self, frame_number: int):
-        if self.current_branch_index >= len(self.all_branches):
-            return
-
-        branch = self.all_branches[self.current_branch_index]
-
-        if self.state == "building":
-            if self.current_branch_step >= len(branch):
-                self.state = "pulsing"
-                self.pulse_position = 0
-                self.pulse_direction = 1
-                self.pulse_frame_counter = 0
-                return
-
-            step = branch[self.current_branch_step]
-
-            if step[0] in ["virtual_top", "virtual_bottom"]:
-                self.virtual_beam_positions.add((step[2], step[1]))
-            else:
-                x, y = step[0], step[1]
-                self.paths[y][x] = 1
-                self.current_branch_path.append((x, y))
-
-                if self.current_branch_step > 0:
-                    prev_step = branch[self.current_branch_step - 1]
-                    if prev_step[0] not in ["virtual_top", "virtual_bottom"]:
-                        prev_x, prev_y = prev_step[0], prev_step[1]
-
-                        if prev_x < x:
-                            self.path_directions[(x, y)] = "right"
-                            if self.data[prev_y][prev_x] == "^":
-                                self.splitter_connections[(prev_x, prev_y)] = "right"
-                                if self.board_spacing > 1:
-                                    self.connector_lines[(prev_x, prev_y, "right")] = (
-                                        True
-                                    )
-                        elif prev_x > x:
-                            self.path_directions[(x, y)] = "left"
-                            if self.data[prev_y][prev_x] == "^":
-                                self.splitter_connections[(prev_x, prev_y)] = "left"
-                                if self.board_spacing > 1:
-                                    self.connector_lines[(prev_x, prev_y, "left")] = (
-                                        True
-                                    )
-                        else:
-                            self.path_directions[(x, y)] = "straight"
-
-                        if self.data[y][x] == "^" and prev_y != y:
-                            ui_x = self.px + (self.board_spacing * x)
-                            ui_y = y + self.py
-                            self.ripple_effects.append(
-                                {
-                                    "x": ui_x,
-                                    "y": ui_y,
-                                    "radius": 0,
-                                    "max_radius": self.max_radius,
-                                    "frame": frame_number,
-                                }
-                            )
-                    else:
-                        self.path_directions[(x, y)] = "straight"
-                else:
-                    self.path_directions[(x, y)] = "straight"
-
-            self.current_branch_step += 1
-
-        elif self.state == "pulsing":
-            if self.pulse_frame_counter % self.pulse_speed == 0:
-                erase_position = self.pulse_position - self.pulse_length - 1
-                if 0 <= erase_position < len(branch):
-                    step = branch[erase_position]
-                    if step[0] in ["virtual_top", "virtual_bottom"]:
-                        self.erased_virtual_positions.add((step[2], step[1]))
-                        self.buffer.put_char(step[2], step[1], " ")
-                    else:
-                        x, y = step[0], step[1]
-
-                        # Don't erase if this is a completed beam position
-                        if (x, y) not in self.completed_beam_positions:
-                            self.erased_positions.add((x, y))
-
-                            ui_x = self.px + (self.board_spacing * x)
-                            ui_y = y + self.py
-                            if (ui_x, ui_y) in self.twinkles:
-                                self.buffer.put_char(
-                                    ui_x, ui_y, self.twinkles[(ui_x, ui_y)].fade.colored
-                                )
-                            else:
-                                self.buffer.put_char(ui_x, ui_y, " ")
-
-                            if (x, y, "left") in self.connector_lines:
-                                splitter_ui_x = self.px + (self.board_spacing * x)
-                                splitter_ui_y = y + self.py
-                                for offset in range(1, self.board_spacing):
-                                    connector_x = splitter_ui_x - offset
-                                    self.erased_connector_positions.add(
-                                        (connector_x, splitter_ui_y)
-                                    )
-                                    self.buffer.put_char(
-                                        connector_x, splitter_ui_y, " "
-                                    )
-
-                            if (x, y, "right") in self.connector_lines:
-                                splitter_ui_x = self.px + (self.board_spacing * x)
-                                splitter_ui_y = y + self.py
-                                for offset in range(1, self.board_spacing):
-                                    connector_x = splitter_ui_x + offset
-                                    self.erased_connector_positions.add(
-                                        (connector_x, splitter_ui_y)
-                                    )
-                                    self.buffer.put_char(
-                                        connector_x, splitter_ui_y, " "
-                                    )
-
-                self.pulse_position += self.pulse_direction
-
-                if self.pulse_position - self.pulse_length - 1 >= len(branch):
-                    # Add all positions from this branch to completed set
-                    for pos in self.current_branch_path:
-                        self.completed_beam_positions.add(pos)
-                        # Store the direction permanently
-                        if pos in self.path_directions:
-                            self.completed_path_directions[pos] = self.path_directions[
-                                pos
-                            ]
-
-                    # Store connector lines permanently
-                    for key in self.connector_lines:
-                        self.completed_connector_lines[key] = True
-
-                    for pos in self.connector_positions:
-                        if pos not in self.erased_connector_positions:
-                            self.buffer.put_char(pos[0], pos[1], " ")
-
-                    for vx, vy in self.virtual_beam_positions:
-                        if (vx, vy) not in self.erased_virtual_positions:
-                            self.buffer.put_char(vx, vy, " ")
-
-                    self.current_branch_index += 1
-                    self.current_branch_step = 0
-                    self.current_branch_path = []
-                    self.paths = [
-                        [0] * self.board_width for _ in range(self.board_height)
-                    ]
-                    self.path_directions.clear()
-                    self.splitter_connections.clear()
-                    self.connector_lines.clear()
-                    self.connector_positions.clear()
-                    self.virtual_beam_positions.clear()
-                    self.erased_positions.clear()
-                    self.erased_virtual_positions.clear()
-                    self.erased_connector_positions.clear()
-                    self.state = "building"
-                    self.pulse_position = 0
-                    self.pulse_direction = 1
-                    return
-
-            self.pulse_frame_counter += 1
-
-    def update_board(self, frame_number: int):
-        if self.branch_mode:
-            self.update_board_branch_mode(frame_number)
-        else:
-            self.update_board_row_mode(frame_number)
-
-    def update_ripples(self, frame_number: int):
-        for x, y in self.last_ripple_positions:
-            if (x, y) not in self.board_positions and (
-                x,
-                y,
-            ) not in self.connector_positions:
-                self.buffer.put_char(x, y, " ")
-
-        current_ripple_positions = set()
-        active_ripples = []
-
-        for ripple in self.ripple_effects:
-            age = frame_number - ripple["frame"]
-            ripple["radius"] = age * 0.5
-
-            if ripple["radius"] <= ripple["max_radius"]:
-                active_ripples.append(ripple)
-
-                for angle in range(0, 360, 10):
-                    rad = math.radians(angle)
-                    x = int(ripple["x"] + ripple["radius"] * math.cos(rad))
-                    y = int(ripple["y"] + ripple["radius"] * math.sin(rad) * 0.5)
-
-                    progress = ripple["radius"] / ripple["max_radius"]
-                    color_value = int(255 - (progress * (255 - 232)))
-
-                    char_index = int((1 - progress) * (len(self.ripple_chars) - 1))
-                    ripple_char = self.ripple_chars[char_index]
-
-                    if 0 <= x < self.buffer.width() and 0 <= y < self.buffer.height():
-                        if (x, y) not in self.board_positions and (
-                            x,
-                            y,
-                        ) not in self.connector_positions:
-                            current_ripple_positions.add((x, y))
-                            self.buffer.put_char(x, y, bc(ripple_char, color_value))
-
-        self.ripple_effects = active_ripples
-        self.last_ripple_positions = current_ripple_positions
-
-    def get_pulse_positions(self):
-        pulse_positions = set()
-        pulse_screen_positions = set()
-
-        if self.state == "pulsing" and self.current_branch_index < len(
-            self.all_branches
-        ):
-            branch = self.all_branches[self.current_branch_index]
-
-            for i in range(
-                max(0, self.pulse_position - self.pulse_length),
-                min(len(branch), self.pulse_position + 1),
-            ):
-                if 0 <= i < len(branch):
-                    step = branch[i]
-                    if step[0] in ["virtual_top", "virtual_bottom"]:
-                        pulse_screen_positions.add((step[2], step[1]))
-                    else:
-                        pulse_positions.add((step[0], step[1]))
-
-        return pulse_positions, pulse_screen_positions
-
-    def get_board_changes(self):
-        pulse_positions, pulse_screen_positions = self.get_pulse_positions()
-
-        for y in range(self.board_height):
-            for x in range(self.board_width):
-                if (x, y) in self.erased_positions:
-                    continue
-
-                val = self.paths[y][x]
-                char = self.data[y][x]
-
-                ui_x = self.px + (self.board_spacing * x)
-                ui_y = y + self.py
-
-                self.board_positions.add((ui_x, ui_y))
-
-                is_pulsing = (x, y) in pulse_positions
-                is_completed = (x, y) in self.completed_beam_positions
-
-                # Determine color: evergreen if completed, pulse color if pulsing, normal otherwise
-                if is_completed:
-                    color = self.evergreen_color
-                elif is_pulsing:
-                    color = self.pulse_color
-                else:
-                    color = self.beam_color
-
-                if char == "^":
-                    if (x, y) in self.splitter_connections:
-                        connection = self.splitter_connections[(x, y)]
-                        if connection == "left":
-                            beam_char = self.splitter_left_char
-                        else:
-                            beam_char = self.splitter_right_char
-                        self.changes.add((ui_x, ui_y, bc(beam_char, color)))
-                    else:
-                        # Use the permanent color assigned to this splitter
-                        splitter_color = self.splitter_colors.get(
-                            (x, y), self.splitter_normal_colors[0]
-                        )
-                        self.changes.add(
-                            (ui_x, ui_y, bc(self.splitter_char, splitter_color))
-                        )
-                    continue
-
-                # Render completed beams even if val == 0
-                if is_completed:
-                    direction = self.completed_path_directions.get((x, y), "straight")
-                    if direction == "left":
-                        beam_char = self.beam_left_char
-                    elif direction == "right":
-                        beam_char = self.beam_right_char
-                    else:
-                        beam_char = self.beam_char
-                    self.changes.add((ui_x, ui_y, bc(beam_char, color)))
-                    continue
-
-                if val == 0:
-                    if (ui_x, ui_y) in self.twinkles:
-                        self.changes.add(
-                            (ui_x, ui_y, self.twinkles[(ui_x, ui_y)].fade.colored)
-                        )
-                    else:
-                        self.changes.add((ui_x, ui_y, " "))
-                    continue
-
-                direction = self.path_directions.get((x, y), "straight")
-                if direction == "left":
-                    beam_char = self.beam_left_char
-                elif direction == "right":
-                    beam_char = self.beam_right_char
-                else:
-                    beam_char = self.beam_char
-
-                self.changes.add((ui_x, ui_y, bc(beam_char, color)))
-
-        # Render current branch connector lines
-        for (split_x, split_y, direction), _ in self.connector_lines.items():
-            if (split_x, split_y) in self.erased_positions:
-                continue
-
-            splitter_ui_x = self.px + (self.board_spacing * split_x)
-            splitter_ui_y = split_y + self.py
-
-            is_pulsing = (split_x, split_y) in pulse_positions
-            is_completed = (split_x, split_y) in self.completed_beam_positions
-
-            if is_completed:
-                color = self.evergreen_color
-            elif is_pulsing:
-                color = self.pulse_color
-            else:
-                color = self.beam_color
-
-            if direction == "left":
-                for offset in range(1, self.board_spacing):
-                    connector_x = splitter_ui_x - offset
-                    if (
-                        connector_x,
-                        splitter_ui_y,
-                    ) not in self.erased_connector_positions:
-                        self.changes.add(
-                            (
-                                connector_x,
-                                splitter_ui_y,
-                                bc(self.beam_horizontal_char, color),
-                            )
-                        )
-                        self.connector_positions.add((connector_x, splitter_ui_y))
-            elif direction == "right":
-                for offset in range(1, self.board_spacing):
-                    connector_x = splitter_ui_x + offset
-                    if (
-                        connector_x,
-                        splitter_ui_y,
-                    ) not in self.erased_connector_positions:
-                        self.changes.add(
-                            (
-                                connector_x,
-                                splitter_ui_y,
-                                bc(self.beam_horizontal_char, color),
-                            )
-                        )
-                        self.connector_positions.add((connector_x, splitter_ui_y))
-
-        # Render completed connector lines
-        for (split_x, split_y, direction), _ in self.completed_connector_lines.items():
-            splitter_ui_x = self.px + (self.board_spacing * split_x)
-            splitter_ui_y = split_y + self.py
-
-            color = self.evergreen_color
-
-            if direction == "left":
-                for offset in range(1, self.board_spacing):
-                    connector_x = splitter_ui_x - offset
-                    self.changes.add(
-                        (
-                            connector_x,
-                            splitter_ui_y,
-                            bc(self.beam_horizontal_char, color),
-                        )
-                    )
-                    self.connector_positions.add((connector_x, splitter_ui_y))
-            elif direction == "right":
-                for offset in range(1, self.board_spacing):
-                    connector_x = splitter_ui_x + offset
-                    self.changes.add(
-                        (
-                            connector_x,
-                            splitter_ui_y,
-                            bc(self.beam_horizontal_char, color),
-                        )
-                    )
-                    self.connector_positions.add((connector_x, splitter_ui_y))
-
-        for screen_x, screen_y in self.virtual_beam_positions:
-            if (screen_x, screen_y) in self.erased_virtual_positions:
-                continue
-
-            is_pulsing = (screen_x, screen_y) in pulse_screen_positions
-            color = self.pulse_color if is_pulsing else self.beam_color
-            self.changes.add((screen_x, screen_y, bc(self.beam_char, color)))
-
-    def place_changes(self):
-        for x, y, val in self.changes:
-            self.buffer.put_char(x, y, val)
-
-    def render_frame(self, frame_number: int):
-        if frame_number % self.second_effect_halt == 0:
-            if self.second_effect is not None:
-                self.second_effect.render_frame(frame_number=frame_number)
-                for y in range(self.buffer.height()):
-                    for x in range(self.buffer.width()):
-                        x_bound = (
-                            self.px
-                            < x
-                            < (self.px + (self.board_width * self.board_spacing))
-                        )
-                        y_bound = self.py <= y < (self.py + self.board_height)
-                        if (
-                            (not x_bound or not y_bound)
-                            and (
-                                x,
-                                y,
-                            )
-                            not in self.virtual_beam_positions
-                            and (x, y) not in self.last_ripple_positions
-                        ):
-                            self.buffer.put_char(
-                                x, y, self.second_effect.buffer.get_char(x, y)
-                            )
-
-        if frame_number % self.effect_halt == 0:
-            self.changes.clear()
-            self.update_board(frame_number=frame_number)
-            self.get_board_changes()
-
-        self.update_twinkles()
-
-        self.update_ripples(frame_number=frame_number)
-
-        if self.branch_mode:
-            self.buffer.put_at(
-                1,
-                1,
-                f"Branch: {self.current_branch_index + 1}/{len(self.all_branches)} Pulse: {self.pulse_position}",
+            pending.extend(
+                path + suffix for suffix in reversed(next_steps(board, path[-1]))
             )
-        else:
-            self.buffer.put_at(1, 1, f"X: {self.x}, Y: {self.y}")
-        self.place_changes()
 
 
-def animate(screen: Screen):
-    renderer = EffectRenderer(
-        screen=screen,
-        frames=float("inf"),
-        frame_time=0.01,
-        effect_type="static",
-        background=" ",
-        transparent=False,
+def branch_states(board: Board, max_branches: int = 100, pulse_length: int = 5):
+    """Build/pulse a bounded sample, accumulating completed edges as snapshots."""
+    if max_branches < 1 or pulse_length < 1:
+        raise ValueError("Branch limit and pulse length must be positive")
+    completed: set[Edge] = set()
+    tick = branch = 0
+    for branch, path in enumerate(islice(iter_branches(board), max_branches), 1):
+        previous = frozenset(completed)
+        for length in range(1, len(path) + 1):
+            yield Snapshot(path[:length], previous, branch, tick=tick)
+            tick += 1
+        for pulse in range(len(path) + pulse_length):
+            yield Snapshot(path, previous, branch, pulse, "pulsing", tick)
+            tick += 1
+        completed.update(zip(path, path[1:]))
+    yield Snapshot(
+        completed=frozenset(completed), branch=branch, phase="complete", tick=tick
     )
 
-    twinkle = effect_registry.create(
-        "twinkle",
-        Buffer(screen.height, screen.width),
-        " ",
-        settings=TwinkleSettings(density=0.05),
+
+def row_states(board: Board):
+    """Show the aggregate beam graph one row at a time without branch enumeration."""
+    counts = Counter({board[0].index("S"): 1})
+    completed: set[Edge] = set()
+    yield Snapshot(path=((board[0].index("S"), 0),), phase="scanning")
+    for y in range(len(board) - 1):
+        following = Counter()
+        for x, count in counts.items():
+            for suffix in next_steps(board, (x, y)):
+                completed.update(zip(((x, y), *suffix), suffix))
+                following[suffix[-1][0]] += count
+        counts = following
+        yield Snapshot(completed=frozenset(completed), phase="scanning", tick=y + 1)
+    yield Snapshot(completed=frozenset(completed), phase="complete", tick=len(board))
+
+
+def viewport(board: Board, state: Snapshot, buffer: Buffer, spacing: int):
+    """Center small boards and follow the current beam on oversized boards."""
+    rows = max(0, buffer.height() - 3)
+    columns = max(1, (buffer.width() + spacing - 1) // spacing)
+    if state.path:
+        index = (
+            len(state.path) - 1
+            if state.pulse is None
+            else min(state.pulse, len(state.path) - 1)
+        )
+        x, y = state.path[index]
+    else:
+        x, y = max(
+            (b for _, b in state.completed),
+            key=lambda p: p[1],
+            default=(board[0].index("S"), 0),
+        )
+    camera = (
+        max(0, min(x - columns // 2, len(board[0]) - columns)),
+        max(0, min(y - rows // 2, len(board) - rows)),
+    )
+    return GridViewport.from_rows(
+        buffer,
+        board,
+        spacing=(spacing, 1),
+        camera=camera,
+        region=(0, 2, buffer.width(), rows),
     )
 
-    fireworks = effect_registry.create(
-        "firework",
-        Buffer(screen.height, screen.width),
-        " ",
-        settings=FireworkSettings(
-            firework_type="random", color_enabled=True, color_type="twotone", rate=0.05
-        ),
+
+def colored(char: str, color: int) -> str:
+    return bruhcolored(char, color=color).colored
+
+
+def draw_snapshot(
+    board: Board, state: Snapshot, buffer: Buffer, spacing=2, pulse_length=5
+):
+    """Draw current state only; fresh scene buffers eliminate manual erase sets."""
+    grid = viewport(board, state, buffer, spacing)
+    left, top = grid.to_screen(0, 0)
+    right = left + (len(board[0]) - 1) * spacing + 1
+    for y in range(max(2, top), min(buffer.height() - 1, top + len(board))):
+        start, end = max(0, left), min(buffer.width(), right)
+        if end > start:
+            buffer.put_at(start, y, " " * (end - start))
+
+    def glyph(cell, x, y):
+        if cell == "^":
+            return colored("✦", PALETTE[(x * 13 + y * 7) % len(PALETTE)])
+        if cell == "S":
+            return colored("S", 231)
+        return colored("·", 232 + round(11.5 * (1 + math.sin(state.tick / 10 + x + y))))
+
+    grid.draw(board, glyph)
+    # Each visible screen cell stores connection bits, color priority, and color.
+    lines = {}
+
+    def segment(a, b, color, priority):
+        ax, ay = a
+        bx, by = b
+        dx, dy = (bx > ax) - (bx < ax), (by > ay) - (by < ay)
+        outward, inward = (2, 8) if dx > 0 else (8, 2) if dx < 0 else (4, 1)
+        for step in range(abs(bx - ax) + abs(by - ay)):
+            for x, y, bit in (
+                (ax + dx * step, ay + dy * step, outward),
+                (ax + dx * (step + 1), ay + dy * (step + 1), inward),
+            ):
+                if 0 <= x < buffer.width() and 2 <= y < buffer.height() - 1:
+                    bits, old_priority, old_color = lines.get((x, y), (0, -1, color))
+                    lines[x, y] = (
+                        bits | bit,
+                        max(priority, old_priority),
+                        color if priority >= old_priority else old_color,
+                    )
+
+    for a, b in state.completed:
+        segment(grid.to_screen(*a), grid.to_screen(*b), 28, 0)
+    for index, (a, b) in enumerate(zip(state.path, state.path[1:]), 1):
+        if state.pulse is not None and index < state.pulse - pulse_length:
+            continue
+        pulse = (
+            state.pulse is not None
+            and state.pulse - pulse_length <= index <= state.pulse
+        )
+        segment(
+            grid.to_screen(*a),
+            grid.to_screen(*b),
+            231 if pulse else 45,
+            2 if pulse else 1,
+        )
+
+    # Continue beams above/below the board without adding screen positions to state.
+    sx, sy = grid.to_screen(board[0].index("S"), 0)
+    if sy > 2:
+        segment((sx, 2), (sx, sy), 28 if state.completed else 45, 0)
+    exits = {b[0] for _, b in state.completed if b[1] == len(board) - 1}
+    if state.path and state.path[-1][1] == len(board) - 1:
+        exits.add(state.path[-1][0])
+    for x in exits:
+        sx, sy = grid.to_screen(x, len(board) - 1)
+        if sy < buffer.height() - 2:
+            segment(
+                (sx, sy),
+                (sx, buffer.height() - 2),
+                28 if state.phase == "complete" else 45,
+                0,
+            )
+
+    # Ripple age is derived from the snapshot, so repeated drawing is pure.
+    for index, (x, y) in enumerate(state.path):
+        if not index or board[y][x] != "^" or state.path[index - 1][1] == y:
+            continue
+        age = len(state.path) - index - 1 + (state.pulse or 0)
+        radius = age / 2
+        if not 0 < radius <= 15:
+            continue
+        cx, cy = grid.to_screen(x, y)
+        for angle in range(0, 360, 10):
+            theta = math.radians(angle)
+            rx, ry = (
+                round(cx + radius * math.cos(theta)),
+                round(cy + radius * math.sin(theta) / 2),
+            )
+            anchor = (
+                left <= rx < right
+                and top <= ry < top + len(board)
+                and (rx - left) % spacing == 0
+            )
+            if (
+                0 <= rx < buffer.width()
+                and 2 <= ry < buffer.height() - 1
+                and not anchor
+                and (rx, ry) not in lines
+            ):
+                buffer.put_char(rx, ry, colored("·", round(255 - 23 * radius / 15)))
+    for (x, y), (bits, _, color) in lines.items():
+        buffer.put_char(x, y, colored(GLYPHS[bits], color))
+
+
+def run(
+    board: Board,
+    *,
+    mode="branches",
+    max_branches=100,
+    steps_per_second=60,
+    fps=60,
+    spacing=2,
+    frames=None,
+    background=True,
+    on_complete="hold",
+):
+    """Compose independent background effects, finite Playback, and status text."""
+    if spacing < 1 or max_branches < 1:
+        raise ValueError("Spacing and branch limit must be positive")
+    if mode not in ("branches", "rows"):
+        raise ValueError("Mode must be branches or rows")
+    totals = count_timelines(board)
+    states = (
+        branch_states(board, max_branches) if mode == "branches" else row_states(board)
     )
-    if isinstance(fireworks, FireworkEffect):
-        fireworks.set_second_effect(twinkle)
-
-    # Note: Snow, Noise, Matrix, Rain are defined but only fireworks is used in final call
-
-    renderer.effect = AdventOfCodeDay07Effect(
-        buffer=Buffer(screen.height, screen.width),
-        background=" ",
-        part="two",
-        data_file="datasmall",
-        second_effect=fireworks,
-        second_effect_halt=5,
-        board_spacing=2,
-        effect_halt=1,
-        branch_mode=True,
-        twinkle_update_frames=10,
-        pulse_speed=1,
-        pulse_length=5,
-        max_radius=15,
+    playback = Playback(
+        states,
+        lambda state, target: draw_snapshot(board, state, target, spacing),
+        steps_per_second=steps_per_second,
     )
 
-    renderer.run()
+    def status(buffer):
+        state = playback.state
+        phase = (
+            "Paused" if playback.paused else state.phase.title() if state else "Ready"
+        )
+        branch = (
+            f" | Branch {state.branch if state else 0}/{min(max_branches, totals.timelines)}"
+            if mode == "branches"
+            else ""
+        )
+        buffer.put_at(
+            0,
+            0,
+            f"Day 7 | Splitters: {totals.splitters} | Timelines: {totals.timelines}",
+        )
+        buffer.put_at(0, 1, f"{phase}{branch} | {playback.steps_per_second:g} steps/s")
+        buffer.put_at(
+            0, buffer.height() - 1, "Space pause | n/right step | +/- speed | q quit"
+        )
+
+    def build(buffer):
+        layers = []
+        if background:
+            layers.extend(
+                (
+                    effect_registry.create(
+                        "twinkle",
+                        Buffer(buffer.height(), buffer.width()),
+                        " ",
+                        settings=TwinkleSettings(density=0.05),
+                    ),
+                    Layer(
+                        effect_registry.create(
+                            "firework",
+                            buffer,
+                            " ",
+                            settings=FireworkSettings(
+                                firework_type="random",
+                                color_enabled=True,
+                                color_type="twotone",
+                                rate=0.02,
+                            ),
+                        ),
+                        transparent=True,
+                    ),
+                )
+            )
+        return Scene(*layers, playback, CallbackEffect(status))
+
+    return play(
+        effect_factory=build,
+        fps=fps,
+        updates_per_second=60,
+        frames=frames,
+        event_handler=playback.handle_event,
+        on_complete=on_complete,
+    )
 
 
-if __name__ in ["__main__", "day07_animate"]:
-    Screen.show(animate)
+def positive_number(value):
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("Value must be positive and finite")
+    return number
+
+
+def positive_integer(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("Value must be at least 1")
+    return number
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--input", type=Path, default=Path(__file__).resolve().with_name("datasmall")
+    )
+    parser.add_argument("--mode", choices=("branches", "rows"), default="branches")
+    parser.add_argument("--max-branches", type=positive_integer, default=100)
+    parser.add_argument("--steps-per-second", type=positive_number, default=60)
+    parser.add_argument("--fps", type=positive_number, default=60)
+    parser.add_argument("--spacing", type=positive_integer, default=2)
+    parser.add_argument("--frames", type=int)
+    parser.add_argument("--no-background", action="store_true")
+    parser.add_argument("--exit-on-complete", action="store_true")
+    args = parser.parse_args(argv)
+    if args.frames is not None and args.frames < 0:
+        parser.error("--frames must not be negative")
+    try:
+        board = parse_board(args.input.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
+    return run(
+        board,
+        mode=args.mode,
+        max_branches=args.max_branches,
+        steps_per_second=args.steps_per_second,
+        fps=args.fps,
+        spacing=args.spacing,
+        frames=args.frames,
+        background=not args.no_background,
+        on_complete="exit" if args.exit_on_complete else "hold",
+    )
+
+
+if __name__ == "__main__":
+    main()

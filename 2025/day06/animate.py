@@ -1,514 +1,226 @@
-"""
-Advent of Code 2025 - Day 6 Animation
-Updated for bruhanimate 0.2.x
-"""
+"""Day 6: a scrolling worksheet scanner with exact horizontal/vertical equations."""
 
-import random
-from typing import Optional
+from __future__ import annotations
 
-from bruhanimate import (
-    BaseEffect,
-    Buffer,
-    EffectRenderer,
-    Screen,
-    TWINKLE_SPEC,
-    TwinkleSettings,
-    effect_registry,
+import math
+import re
+import sys
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
+from pathlib import Path
+from textwrap import wrap
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from animation_support import (  # noqa: E402
+    argument_parser,
+    ink,
+    label,
+    load_input,
+    run_animation,
+    run_options,
 )
-from bruhcolor import bruhcolored as bc
+
+from bruhanimate import Buffer, GridViewport  # noqa: E402
 
 
-class AdventOfCodeDay06Effect(BaseEffect):
-    def __init__(
-        self,
-        buffer: Buffer,
-        background: str,
-        part: str = "one",
-        data_file: str = "data",
-        second_effect: Optional[BaseEffect] = None,
-        second_effect_halt: int = 1,
-        scan_speed: int = 2,
-        calc_pause_frames: int = 15,
-        twinkle_update_frames: int = 1,
-        fill_rate: int = 5,
-    ):
-        super().__init__(buffer, background)
-        self.part = part
-        self.data_file = data_file
-        self.second_effect = second_effect
-        self.second_effect_halt = second_effect_halt
-        self.scan_speed = scan_speed
-        self.calc_pause_frames = calc_pause_frames
-        self.twinkle_update_frames = twinkle_update_frames
-        self.fill_rate = fill_rate
+@dataclass(frozen=True)
+class Problem:
+    start: int
+    end: int
+    operation: str
+    horizontal: tuple[int, ...]
+    vertical: tuple[int, ...]
+    columns: tuple[int, ...]
 
-        self.data = None
-        self.worksheet_lines = []
-        self.operation_line = ""
-        self.worksheet_width = 0
 
-        self.state = "scanning"
-        self.current_column = 0
-        self.current_problem_columns = []
-        self.current_problem_numbers = []
-        self.current_operation = None
+@dataclass(frozen=True)
+class Worksheet:
+    rows: tuple[str, ...]
+    operations: str
+    problems: tuple[Problem, ...]
 
-        self.building_equation = []
 
-        self.scanner_screen_x = None
-        self.viewport_offset = 0
+@dataclass(frozen=True)
+class Snapshot:
+    problem: int = 0
+    cursor: tuple[int, int] = (0, 0)
+    numbers: tuple[int, ...] = ()
+    result: int = 0
+    total: int = 0
+    completed: frozenset[int] = frozenset()
+    phase: str = "scanning"
 
-        self.problems_solved = []
-        self.grand_total = 0
-        self.current_result = 0
 
-        self.calc_flash_frames = 0
-        self.total_flash_frames = 0
-        self.frame_counter = 0
-        self.twinkle_frame_counter = 0
+def parse_worksheet(text: str) -> Worksheet:
+    """Preserve fixed-width columns, pad ragged right edges, validate blocks.
 
-        self.twinkles = {}
-
-        self.screen_twinkles = {}
-        self.unfilled_positions = []
-
-        self.colors = {
-            "scanner": 51,
-            "space_col": 240,
-            "number": 255,
-            "multiply": 196,
-            "add": 46,
-            "result": 226,
-            "total": 201,
-        }
-
-        self._load_data()
-
-    def _load_data(self):
-        try:
-            with open(self.data_file, "r") as f:
-                lines = f.read().split("\n")
-                self.worksheet_lines = lines[:-1]
-                self.operation_line = lines[-1]
-                if self.worksheet_lines:
-                    self.worksheet_width = len(self.worksheet_lines[0])
-        except FileNotFoundError:
-            # Fallback for testing if the data file is missing
-            self.worksheet_lines = [" 123 ", " 456 ", " 789 "]
-            self.operation_line = " + * "
-            self.worksheet_width = 5
-
-        self.scanner_screen_x = self.buffer.width() // 2
-
-    def _is_space_column(self, col_idx):
-        if col_idx >= self.worksheet_width:
-            return True
-        return all(
-            line[col_idx] == " " for line in self.worksheet_lines if col_idx < len(line)
+    Blank separator columns delimit problems. Each block has one +/* operator
+    and one unsigned integer per numeric row. Trailing blank lines are harmless.
+    Vertical operands read digits top to bottom, columns right to left.
+    """
+    lines = text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if len(lines) < 2:
+        raise ValueError("Expected numeric rows and a final +/* operator row")
+    if any(not re.fullmatch(r"[0-9 ]+", row) for row in lines[:-1]):
+        raise ValueError(
+            "Numeric worksheet rows may contain only ASCII digits and spaces"
         )
+    if not re.fullmatch(r"[+* ]+", lines[-1]):
+        raise ValueError("The final worksheet row must contain only +, *, and spaces")
+    width = max(map(len, lines))
+    rows = tuple(row.ljust(width) for row in lines[:-1])
+    operations = lines[-1].ljust(width)
+    occupied = [any(row[x] != " " for row in (*rows, operations)) for x in range(width)]
+    problems, x = [], 0
+    while x < width:
+        if not occupied[x]:
+            x += 1
+            continue
+        start = x
+        while x < width and occupied[x]:
+            x += 1
+        end = x
+        operation = operations[start:end].strip()
+        if operation not in ("+", "*"):
+            raise ValueError("Each problem block must contain exactly one + or *")
+        tokens = tuple(row[start:end].strip() for row in rows)
+        if any(not re.fullmatch(r"[0-9]+", token) for token in tokens):
+            raise ValueError("Each problem needs exactly one integer per numeric row")
+        columns = tuple(
+            column
+            for column in range(end - 1, start - 1, -1)
+            if any(row[column] != " " for row in rows)
+        )
+        vertical = tuple(
+            int("".join(row[column] for row in rows if row[column] != " "))
+            for column in columns
+        )
+        problems.append(
+            Problem(start, end, operation, tuple(map(int, tokens)), vertical, columns)
+        )
+    if not problems:
+        raise ValueError("Worksheet contains no problems")
+    return Worksheet(rows, operations, tuple(problems))
 
-    def _get_column_chars(self, col_idx):
-        chars = []
-        for line in self.worksheet_lines:
-            if col_idx < len(line):
-                chars.append(line[col_idx])
-        return chars
 
-    def _extract_number_from_column(self, col_idx):
-        chars = self._get_column_chars(col_idx)
-        num_str = "".join(chars).strip()
-        return int(num_str) if num_str else None
+def calculate(numbers: tuple[int, ...], operation: str) -> int:
+    """Keep repeated operands and zero results; never deduplicate numbers."""
+    if operation == "+":
+        return sum(numbers)
+    if operation == "*":
+        return math.prod(numbers)
+    raise ValueError("Operation must be + or *")
 
-    def _extract_number_from_column_part2(self, col_idx):
-        chars = self._get_column_chars(col_idx)
-        digit_str = "".join(chars).strip()
-        return int(digit_str) if digit_str else None
 
-    def _extract_number_from_columns(self, columns):
-        if self.part == "one":
-            number_str = ""
-            for col_idx in columns:
-                chars = self._get_column_chars(col_idx)
-                number_str += "".join(chars).strip()
-            return int(number_str) if number_str else 0
-        else:
-            numbers = []
-            for col_idx in reversed(columns):
-                chars = self._get_column_chars(col_idx)
-                digit_str = "".join(chars).strip()
-                if digit_str:
-                    numbers.append(int(digit_str))
-            return numbers
-
-    def _calculate_result(self, numbers, operation):
-        if operation == "+":
-            return sum(numbers)
-        else:
-            result = 1
-            for num in numbers:
-                result *= num
-            return result
-
-    def _initialize_unfilled_positions(self):
-        self.unfilled_positions = []
-        for y in range(self.buffer.height()):
-            for x in range(self.buffer.width()):
-                self.unfilled_positions.append((x, y))
-        random.shuffle(self.unfilled_positions)
-
-    def _add_screen_twinkles(self):
-        if not self.unfilled_positions:
-            return
-
-        for _ in range(min(self.fill_rate, len(self.unfilled_positions))):
-            x, y = self.unfilled_positions.pop()
-
-            digit = str(random.randint(0, 9))
-            self.screen_twinkles[(x, y)] = {
-                "spec": TWINKLE_SPEC(char=digit, value=random.randint(0, 23)),
-                "x": x,
-                "y": y,
-            }
-
-    def _create_twinkle_for_position(self, col_idx, row_idx, number):
-        x = self.viewport_offset + col_idx
-
-        worksheet_height = len(self.worksheet_lines) + 1
-        start_y = (self.buffer.height() - worksheet_height) // 3
-        y = start_y + row_idx
-
-        key = (col_idx, row_idx)
-        if key not in self.twinkles:
-            self.twinkles[key] = {
-                "spec": TWINKLE_SPEC(char=number, value=random.randint(0, 23)),
-                "x": x,
-                "y": y,
-            }
-
-    def update_twinkles(self):
-        if self.twinkle_frame_counter % self.twinkle_update_frames != 0:
-            self.twinkle_frame_counter += 1
-            return
-
-        for key, twinkle_data in self.twinkles.items():
-            twinkle_data["spec"].next()
-
-        for key, twinkle_data in self.screen_twinkles.items():
-            twinkle_data["spec"].next()
-
-        self.twinkle_frame_counter += 1
-
-    def _render_worksheet(self):
-        worksheet_height = len(self.worksheet_lines) + 1
-        start_y = (self.buffer.height() - worksheet_height) // 3
-
-        self.viewport_offset = self.scanner_screen_x - self.current_column
-
-        for key, twinkle_data in self.twinkles.items():
-            col_idx, row_idx = key
-            twinkle_data["x"] = self.viewport_offset + col_idx
-            twinkle_data["y"] = start_y + row_idx
-
-        for i, line in enumerate(self.worksheet_lines):
-            y = start_y + i
-
-            for col_idx in range(self.worksheet_width):
-                x = self.viewport_offset + col_idx
-
-                if x < 0 or x >= self.buffer.width():
-                    continue
-
-                char = line[col_idx] if col_idx < len(line) else " "
-
-                if col_idx < self.current_column:
-                    key = (col_idx, i)
-                    if key not in self.twinkles:
-                        self._create_twinkle_for_position(col_idx, i, char)
-
-                    twinkle_data = self.twinkles[key]
-                    colored = twinkle_data["spec"].fade.colored
-                elif col_idx == self.current_column and self.state == "scanning":
-                    colored = bc(
-                        char if char.strip() else "│", self.colors["scanner"]
-                    ).colored
-                elif col_idx in self.current_problem_columns:
-                    colored = bc(char, self.colors["number"]).colored
-                elif col_idx > self.current_column:
-                    if self._is_space_column(col_idx):
-                        colored = bc(char if char.strip() else "│", 240).colored
-                    else:
-                        colored = bc(char, 245).colored
-                elif self._is_space_column(col_idx):
-                    colored = bc(
-                        char if char.strip() else "│", self.colors["space_col"]
-                    ).colored
-                else:
-                    colored = char
-
-                self.buffer.put_char(x, y, colored)
-
-        y = start_y + len(self.worksheet_lines)
-        for col_idx in range(min(len(self.operation_line), self.worksheet_width)):
-            x = self.viewport_offset + col_idx
-
-            if x < 0 or x >= self.buffer.width():
-                continue
-
-            char = self.operation_line[col_idx]
-
-            if col_idx < self.current_column:
-                key = (col_idx, len(self.worksheet_lines))
-                if key not in self.twinkles:
-                    self._create_twinkle_for_position(
-                        col_idx, len(self.worksheet_lines), char
-                    )
-
-                twinkle_data = self.twinkles[key]
-                colored = twinkle_data["spec"].fade.colored
-            elif col_idx == self.current_column and self.state == "scanning":
-                colored = bc(
-                    char if char.strip() else "│", self.colors["scanner"]
-                ).colored
-            elif col_idx > self.current_column:
-                if char in ["+", "*"]:
-                    color = (
-                        self.colors["add"] if char == "+" else self.colors["multiply"]
-                    )
-
-                    colored = bc(char, color).colored
-                else:
-                    colored = bc(char, 245).colored
-            elif char in ["+", "*"]:
-                color = self.colors["add"] if char == "+" else self.colors["multiply"]
-                colored = bc(char, color).colored
-            else:
-                colored = char
-            self.buffer.put_char(x, y, colored)
-
-        if self.state == "scanning":
-            for y in range(self.buffer.height()):
-                if y < start_y or y > start_y + worksheet_height:
-                    char = bc("│", self.colors["scanner"], 235).colored
-                    self.buffer.put_char(self.scanner_screen_x, y, char)
-
-    def _render_calculation_area(self):
-        calc_y = self.buffer.height() - 10
-
-        if self.state == "calculating" and self.current_operation:
-            op_symbol = self.current_operation
-            color = self.colors["add"] if op_symbol == "+" else self.colors["multiply"]
-
-            problem_str = f" {op_symbol} ".join(
-                str(n) for n in self.current_problem_numbers
+def worksheet_states(worksheet: Worksheet, part=2) -> Iterator[Snapshot]:
+    """Scan one operand per event, show its equation, then commit each result once."""
+    if part not in (1, 2):
+        raise ValueError("part must be 1 or 2")
+    state = Snapshot()
+    order = (
+        range(len(worksheet.problems))
+        if part == 1
+        else reversed(range(len(worksheet.problems)))
+    )
+    for number in order:
+        problem = worksheet.problems[number]
+        state = replace(state, problem=number, numbers=(), result=0, phase="scanning")
+        operands = problem.horizontal if part == 1 else problem.vertical
+        for index, operand in enumerate(operands):
+            cursor = (
+                (problem.start, index) if part == 1 else (problem.columns[index], 0)
             )
-            problem_str += f" = {self.current_result}"
-
-            colored_line = []
-            for char in problem_str:
-                if char in ["+", "*"]:
-                    colored_line.append(bc(char, color).colored)
-                elif char.isdigit():
-                    colored_line.append(bc(char, self.colors["result"]).colored)
-                elif char == "=":
-                    colored_line.append(bc(char, self.colors["result"]).colored)
-                else:
-                    colored_line.append(char)
-
-            self.buffer.put_at_center(calc_y, colored_line)
-        elif self.part == "two" and self.building_equation and self.current_operation:
-            op_symbol = self.current_operation
-            color = self.colors["add"] if op_symbol == "+" else self.colors["multiply"]
-
-            problem_str = f" {op_symbol} ".join(str(n) for n in self.building_equation)
-
-            colored_line = []
-            for char in problem_str:
-                if char in ["+", "*"]:
-                    colored_line.append(bc(char, color).colored)
-                elif char.isdigit():
-                    colored_line.append(bc(char, self.colors["number"]).colored)
-                else:
-                    colored_line.append(char)
-
-            self.buffer.put_at_center(calc_y, colored_line)
-
-    def _render_grand_total(self):
-        total_y = self.buffer.height() - 5
-        total_str = f"Grand Total: {self.grand_total}"
-
-        flash_intensity = max(0, self.total_flash_frames / 30)
-        if flash_intensity > 0:
-            color = self.colors["total"]
-        else:
-            color = 255
-
-        colored_line = []
-        for char in total_str:
-            if char.isdigit():
-                colored_line.append(bc(char, color).colored)
-            else:
-                colored_line.append(char)
-
-        self.buffer.put_at_center(total_y, colored_line)
-
-    def _update_animation(self):
-        self.frame_counter += 1
-
-        if self.total_flash_frames > 0:
-            self.total_flash_frames -= 1
-
-        if self.state == "scanning":
-            if self.frame_counter % self.scan_speed == 0:
-                if self._is_space_column(self.current_column):
-                    if self.current_problem_columns:
-                        col_idx = self.current_problem_columns[0]
-                        if col_idx < len(self.operation_line):
-                            op_char = self.operation_line[col_idx].strip()
-                            if op_char in ["+", "*"]:
-                                self.current_operation = op_char
-
-                        if self.part == "one":
-                            self.current_problem_numbers = []
-                            for col in self.current_problem_columns:
-                                chars = self._get_column_chars(col)
-                                num_str = "".join(chars).strip()
-                                if num_str:
-                                    self.current_problem_numbers.append(int(num_str))
-                        else:
-                            self.current_problem_numbers = list(self.building_equation)
-
-                        if self.current_problem_numbers and self.current_operation:
-                            self.current_result = self._calculate_result(
-                                self.current_problem_numbers, self.current_operation
-                            )
-
-                        self.state = "calculating"
-                        self.frame_counter = 0
-                        return
-                else:
-                    if self.current_column not in self.current_problem_columns:
-                        self.current_problem_columns.append(self.current_column)
-
-                    if not self.current_operation and self.current_column < len(
-                        self.operation_line
-                    ):
-                        op_char = self.operation_line[self.current_column].strip()
-                        if op_char in ["+", "*"]:
-                            self.current_operation = op_char
-
-                    if self.part == "two":
-                        chars = self._get_column_chars(self.current_column)
-                        digit_str = "".join(chars).strip()
-                        if digit_str:
-                            num = int(digit_str)
-                            if num not in self.building_equation:
-                                self.building_equation.insert(0, num)
-
-                self.current_column += 1
-
-                if self.current_column >= self.worksheet_width:
-                    if self.current_problem_columns:
-                        col_idx = self.current_problem_columns[0]
-                        if col_idx < len(self.operation_line):
-                            op_char = self.operation_line[col_idx].strip()
-                            if op_char in ["+", "*"]:
-                                self.current_operation = op_char
-
-                        if self.part == "one":
-                            self.current_problem_numbers = []
-                            for col in self.current_problem_columns:
-                                chars = self._get_column_chars(col)
-                                num_str = "".join(chars).strip()
-                                if num_str:
-                                    self.current_problem_numbers.append(int(num_str))
-                        else:
-                            self.current_problem_numbers = list(self.building_equation)
-
-                        if self.current_problem_numbers and self.current_operation:
-                            self.current_result = self._calculate_result(
-                                self.current_problem_numbers, self.current_operation
-                            )
-
-                        self.state = "calculating"
-                    else:
-                        self.state = "complete"
-                        self._initialize_unfilled_positions()
-
-        elif self.state == "calculating":
-            if self.frame_counter >= self.calc_pause_frames:
-                if self.current_result > 0:
-                    self.grand_total += self.current_result
-                    self.total_flash_frames = 30
-
-                self.current_problem_columns = []
-                self.building_equation = []
-                self.current_operation = None
-                self.current_result = 0
-                self.current_problem_numbers = []
-                self.state = "scanning"
-                self.frame_counter = 0
-
-        elif self.state == "complete":
-            if not self.unfilled_positions:
-                if not hasattr(self, "_initialized_positions"):
-                    self._initialize_unfilled_positions()
-                    self._initialized_positions = True
-            if self.unfilled_positions:
-                self._add_screen_twinkles()
-
-    def render_frame(self, frame_number: int):
-        if frame_number % self.second_effect_halt == 0:
-            if self.second_effect is not None:
-                self.second_effect.render_frame(frame_number=frame_number)
-                self.buffer.sync_with(self.second_effect.buffer)
-
-        self._update_animation()
-        self.update_twinkles()
-
-        if self.state == "complete":
-            for key, twinkle_data in self.screen_twinkles.items():
-                x, y = twinkle_data["x"], twinkle_data["y"]
-                if 0 <= x < self.buffer.width() and 0 <= y < self.buffer.height():
-                    self.buffer.put_char(x, y, twinkle_data["spec"].fade.colored)
-
-        if self.state != "complete":
-            self._render_worksheet()
-        self._render_calculation_area()
-        self._render_grand_total()
+            state = replace(state, cursor=cursor, numbers=(*state.numbers, operand))
+            yield state
+        result = calculate(operands, problem.operation)
+        state = replace(state, result=result, phase="calculating")
+        for _ in range(4):
+            yield state
+        state = replace(
+            state,
+            total=state.total + result,
+            completed=state.completed | {number},
+            phase="added",
+        )
+        for _ in range(3):
+            yield state
+    yield replace(state, phase="complete")
 
 
-def animate(screen: Screen):
-    renderer = EffectRenderer(
-        screen=screen,
-        frames=float("inf"),
-        frame_time=0.0,
-        effect_type="static",
-        background=" ",
-        transparent=False,
+def draw_worksheet(worksheet: Worksheet, state: Snapshot, buffer: Buffer, *, part=2):
+    """Pan to the active operand; keep its equation and the grand total below it."""
+    width, height = buffer.width(), buffer.height()
+    problem = worksheet.problems[state.problem]
+    if height < 10:
+        buffer.put_at(
+            0, height // 2, f"Problem {state.problem + 1} | Total: {state.total}"
+        )
+        return
+    rows = (*worksheet.rows, worksheet.operations)
+    region_height = max(1, height // 2 - 3)
+    cursor_x, cursor_y = state.cursor
+    camera = (
+        min(max(0, cursor_x - width // 2), max(0, len(rows[0]) - width)),
+        min(max(0, cursor_y - region_height // 2), max(0, len(rows) - region_height)),
+    )
+    viewport = GridViewport.from_rows(
+        buffer, rows, camera=camera, region=(0, 3, width, region_height)
     )
 
-    twinkle = effect_registry.create(
-        "twinkle",
-        Buffer(screen.height, screen.width),
-        " ",
-        settings=TwinkleSettings(density=0.05),
+    def glyph(char, x, y):
+        if not problem.start <= x < problem.end:
+            return ink(char, 240)
+        scanner = y == cursor_y if part == 1 else x == cursor_x
+        return ink(char, 226 if scanner else 51)
+
+    viewport.draw(rows, glyph)
+    for y in range(len(rows)):
+        if part == 2:
+            viewport.put(cursor_x, y, ink(rows[y][cursor_x], 226))
+    equation = f" {problem.operation} ".join(map(str, state.numbers))
+    if state.phase != "scanning":
+        equation += f" = {state.result}"
+    line = height // 2 + 1
+    label(
+        buffer,
+        0,
+        line,
+        f"Problem {state.problem + 1}/{len(worksheet.problems)} | {'Rows top to bottom' if part == 1 else 'Columns right to left'}",
+        51,
+    )
+    available = max(1, height - line - 4)
+    pieces = wrap(
+        equation, width=max(1, width), break_long_words=True, break_on_hyphens=False
+    )
+    for offset, piece in enumerate(pieces[-available:]):
+        label(
+            buffer,
+            0,
+            line + 1 + offset,
+            piece,
+            46 if state.phase in ("added", "complete") else 226,
+        )
+    label(buffer, 0, height - 2, f"Grand total: {state.total}", 201)
+
+
+def run(worksheet, *, part=2, **options):
+    return run_animation(
+        worksheet_states(worksheet, part),
+        lambda state, buffer: draw_worksheet(worksheet, state, buffer, part=part),
+        title=f"Day 6 | Part {part}",
+        describe=lambda state: f"Solved {len(state.completed)}/{len(worksheet.problems)} | Total: {state.total}",
+        **options,
     )
 
-    renderer.effect = AdventOfCodeDay06Effect(
-        buffer=Buffer(screen.height, screen.width),
-        background=" ",
-        part="two",
-        data_file="dataanimate",
-        second_effect=twinkle,
-        second_effect_halt=20,
-        scan_speed=50,
-        calc_pause_frames=20,
-        twinkle_update_frames=10,
-        fill_rate=15,
-    )
 
-    renderer.run()
+def main(argv=None):
+    parser = argument_parser(__doc__, __file__, "dataanimate", rate=12)
+    args = parser.parse_args(argv)
+    worksheet = load_input(parser, args, parse_worksheet)
+    return run(worksheet, part=args.part, **run_options(args))
 
 
-if __name__ in ["__main__", "day06_animate"]:
-    Screen.show(animate)
+if __name__ == "__main__":
+    main()

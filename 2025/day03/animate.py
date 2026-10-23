@@ -1,484 +1,198 @@
-"""
-Advent of Code 2025 - Day 3 Animation
-Updated for bruhanimate 0.2.x
-"""
+"""Day 3: greedy battery selection, with search windows and a gathering animation."""
 
-import random
-from typing import Optional
+from __future__ import annotations
 
-from bruhanimate import (
-    BaseEffect,
-    Buffer,
-    EffectRenderer,
-    FireworkEffect,
-    FireworkSettings,
-    Screen,
-    TwinkleSettings,
-    effect_registry,
-    text_to_image,
+import sys
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+# Direct invocation and the repository CLI both use the shared root helper.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from animation_support import (  # noqa: E402
+    argument_parser,
+    ink,
+    label,
+    load_input,
+    positive_integer,
+    run_animation,
+    run_options,
 )
-from bruhcolor import bruhcolored
+
+from bruhanimate import Buffer, GridViewport  # noqa: E402
 
 
-class BatteryBankEffect(BaseEffect):
-    def __init__(
-        self,
-        buffer: Buffer,
-        background: str,
-        data_file: str = "data",
-        batteries_to_select: int = 12,
-        second_effect: Optional[BaseEffect] = None,
-        second_effect_halt: int = 1,
-        selection_pause_frames: int = 15,
-        bank_complete_pause_frames: int = 45,
-        digit_spacing: int = 4,
-        flying_in_frames: int = 30,
-        falling_frames: int = 20,
-        converging_frames: int = 15,
+@dataclass(frozen=True)
+class Snapshot:
+    bank: int = 0
+    selected: tuple[int, ...] = ()
+    candidate: int = 0
+    start: int = 0
+    end: int = 0
+    total: int = 0
+    phase: str = "entering"
+    progress: float = 0
+    recent: tuple[tuple[int, int], ...] = ()
+
+
+def parse_banks(text: str) -> tuple[str, ...]:
+    """Validate every bank; no random fallback or hidden 25-bank cutoff."""
+    banks = tuple(line.strip() for line in text.strip().splitlines())
+    if not banks or any(
+        not bank or any(c not in "0123456789" for c in bank) for bank in banks
     ):
-        super().__init__(buffer, background)
-        self.data_file = data_file
-        self.batteries_to_select = batteries_to_select
-        self.second_effect = second_effect
-        self.second_effect_halt = second_effect_halt
-        self.selection_pause_frames = selection_pause_frames
-        self.bank_complete_pause_frames = bank_complete_pause_frames
-        self.digit_spacing = digit_spacing
-        self.flying_in_frames = flying_in_frames
-        self.falling_frames = falling_frames
-        self.converging_frames = converging_frames
+        raise ValueError("Each bank must be a nonempty line of ASCII digits")
+    return banks
 
-        self.current_bank_index = 0
-        self.current_position = 0
-        self.search_start = 0
-        self.selected_indices = []
-        self.selected_values = []
-        self.is_selecting = False
-        self.selection_flash_frames = 0
-        self.is_paused = False
-        self.pause_frames_remaining = 0
-        self.bank_complete_flash_frames = 0
-        self.running_total = 0
-        self.completed = False
 
-        self.is_flying_in = False
-        self.is_falling = False
-        self.is_converging = False
-        self.animation_frame = 0
-        self.flying_chars = []
-        self.falling_chars = []
-        self.converging_chars = []
+def choose(bank: str, count: int) -> tuple[int, ...]:
+    """Return the lexicographically largest ordered subsequence's indices.
 
-        self.completed_banks = []
-        self.current_y = self.buffer.height() // 2
+    Equal digits choose the earliest index, preserving room for later choices.
+    """
+    if not 1 <= count <= len(bank):
+        raise ValueError("Selected battery count must be between 1 and the bank length")
+    selected, start = [], 0
+    for remaining in range(count, 0, -1):
+        end = len(bank) - remaining + 1
+        index = max(range(start, end), key=bank.__getitem__)
+        selected.append(index)
+        start = index + 1
+    return tuple(selected)
 
-        self.banks = []
-        self._load_data()
 
-        self.digit_images = {
-            str(i): text_to_image(str(i), font="doom") for i in range(10)
-        }
-
-        self._start_flying_in_animation()
-
-    def _smooth_ease(self, t):
-        return t * t * t * (t * (t * 6 - 15) + 10)
-
-    def _load_data(self):
-        try:
-            with open(self.data_file, "r") as f:
-                data = f.read().strip()
-                self.banks = [[int(c) for c in line] for line in data.split("\n")][:25]
-        except FileNotFoundError:
-            # Fallback for testing if the data file is missing
-            self.banks = [[random.randint(0, 9) for _ in range(30)] for _ in range(5)]
-
-    def _find_next_selection(self) -> tuple[int, int]:
-        bank = self.banks[self.current_bank_index]
-        remaining_positions = self.batteries_to_select - self.current_position
-        last_viable_spot = len(bank) - remaining_positions
-
-        valid_range = bank[self.search_start : last_viable_spot + 1]
-        largest_digit = max(valid_range)
-        relative_index = valid_range.index(largest_digit)
-        absolute_index = self.search_start + relative_index
-
-        return absolute_index, largest_digit
-
-    def _start_flying_in_animation(self):
-        bank = self.banks[self.current_bank_index]
-        total_width = len(bank) * self.digit_spacing
-        start_x = (self.buffer.width() - total_width) // 2
-
-        self.flying_chars = []
-        for i, digit in enumerate(bank):
-            target_x = start_x + (i * self.digit_spacing)
-            current_x = -10 - (i * 2)
-            self.flying_chars.append((digit, target_x, current_x))
-
-        self.is_flying_in = True
-        self.animation_frame = 0
-
-    def _start_falling_animation(self):
-        bank = self.banks[self.current_bank_index]
-        total_width = len(bank) * self.digit_spacing
-        start_x = (self.buffer.width() - total_width) // 2
-
-        self.falling_chars = []
-        for i, digit in enumerate(bank):
-            if i not in self.selected_indices:
-                x_pos = start_x + (i * self.digit_spacing)
-                self.falling_chars.append((digit, x_pos, self.current_y, 0))
-
-        self.is_falling = True
-        self.animation_frame = 0
-
-    def _start_converging_animation(self):
-        bank = self.banks[self.current_bank_index]
-        total_width = len(bank) * self.digit_spacing
-        start_x = (self.buffer.width() - total_width) // 2
-
-        num_selected = len(self.selected_indices)
-        target_width = num_selected * self.digit_spacing
-        target_start_x = (self.buffer.width() - target_width) // 2
-
-        self.converging_chars = []
-        for idx, bank_idx in enumerate(self.selected_indices):
-            digit = bank[bank_idx]
-            start_pos = start_x + (bank_idx * self.digit_spacing)
-            target_pos = target_start_x + (idx * self.digit_spacing)
-            self.converging_chars.append(
-                (digit, start_pos, target_pos, start_pos, start_pos)
+def bank_states(banks: tuple[str, ...], count: int) -> Iterator[Snapshot]:
+    """Yield immutable visual events lazily, retaining only five recent results."""
+    if not banks or any(not 1 <= count <= len(bank) for bank in banks):
+        raise ValueError("Every bank must contain at least the requested battery count")
+    total, recent = 0, ()
+    for number, bank in enumerate(banks):
+        state = Snapshot(bank=number, total=total, recent=recent, end=len(bank))
+        for tick in range(1, 9):
+            yield replace(state, progress=tick / 8)
+        selected, start = (), 0
+        for remaining in range(count, 0, -1):
+            end = len(bank) - remaining + 1
+            candidate = max(range(start, end), key=bank.__getitem__)
+            state = replace(
+                state,
+                selected=selected,
+                candidate=candidate,
+                start=start,
+                end=end,
+                phase="searching",
+                progress=0,
             )
+            yield state
+            selected += (candidate,)
+            state = replace(state, selected=selected, phase="selected")
+            for tick in range(3):
+                yield replace(state, progress=tick / 2)
+            start = candidate + 1
+        for phase, samples in (("discarding", 6), ("gathering", 8)):
+            for tick in range(1, samples + 1):
+                yield replace(state, phase=phase, progress=tick / samples)
+        value = int("".join(bank[index] for index in selected))
+        total += value
+        recent = (*recent[-4:], (number + 1, value))
+        state = replace(
+            state, phase="bank complete", total=total, recent=recent, progress=1
+        )
+        yield state
+    yield replace(state, phase="complete")
 
-        self.is_converging = True
-        self.animation_frame = 0
 
-    def _render_flying_in_chars(self):
-        progress = self.animation_frame / self.flying_in_frames
-        ease_progress = self._smooth_ease(progress)
-
-        for digit, target_x, start_x in self.flying_chars:
-            current_x = int(start_x + (target_x - start_x) * ease_progress)
-            colored = bruhcolored(str(digit), 255).colored
-
-            if (
-                0 <= current_x < self.buffer.width()
-                and 0 <= self.current_y < self.buffer.height()
-            ):
-                self.buffer.put_char(current_x, self.current_y, colored)
-
-    def _render_falling_chars(self):
-        progress = self.animation_frame / self.falling_frames
-
-        for digit, start_x, start_y, _ in self.falling_chars:
-            if progress < 0.3:
-                drop_progress = self._smooth_ease(progress / 0.3)
-                y_pos = start_y + int(drop_progress)
-                x_pos = start_x
-            else:
-                move_progress = self._smooth_ease((progress - 0.3) / 0.7)
-                y_pos = start_y + 1
-                x_offset = int(move_progress * (self.buffer.width() - start_x + 10))
-                x_pos = start_x + x_offset
-
-            if y_pos < self.buffer.height() and x_pos < self.buffer.width():
-                colored = bruhcolored(str(digit), 236).colored
-                if (
-                    0 <= x_pos < self.buffer.width()
-                    and 0 <= y_pos < self.buffer.height()
-                ):
-                    self.buffer.put_char(x_pos, y_pos, colored)
-
-    def _render_converging_chars(self):
-        progress = self.animation_frame / self.converging_frames
-        ease_progress = self._smooth_ease(progress)
-
-        updated_chars = []
-        for digit, start_x, target_x, current_x, prev_x in self.converging_chars:
-            new_x = int(start_x + (target_x - start_x) * ease_progress)
-
-            if (
-                prev_x != new_x
-                and 0 <= prev_x < self.buffer.width()
-                and 0 <= self.current_y < self.buffer.height()
-            ):
-                self.buffer.put_char(prev_x, self.current_y, self.background)
-
-            colored = bruhcolored(str(digit), 46).colored
-            if (
-                0 <= new_x < self.buffer.width()
-                and 0 <= self.current_y < self.buffer.height()
-            ):
-                self.buffer.put_char(new_x, self.current_y, colored)
-
-            updated_chars.append((digit, start_x, target_x, new_x, new_x))
-
-        self.converging_chars = updated_chars
-
-    def _render_bank_digits(self):
-        for bank_data, selected_indices, y_pos in self.completed_banks:
-            if y_pos < 0:
+def draw_bank(banks: tuple[str, ...], state: Snapshot, buffer: Buffer):
+    """Paint a following camera, eligible window, and falling/gathering digits."""
+    bank = banks[state.bank]
+    width, height = buffer.width(), buffer.height()
+    if height < 7:
+        buffer.put_at(
+            0,
+            max(0, height // 2),
+            f"Selected: {''.join(bank[i] for i in state.selected)}",
+        )
+        return
+    y = max(4, height // 2)
+    columns = max(1, width // 2)
+    camera = min(max(0, state.candidate - columns // 2), max(0, len(bank) - columns))
+    viewport = GridViewport(
+        buffer,
+        len(bank),
+        1,
+        spacing=(2, 1),
+        camera=(camera, 0),
+        region=(0, y, width, 1),
+    )
+    selected = set(state.selected)
+    progress = state.progress**2 * (3 - 2 * state.progress)
+    gathering = state.phase in ("gathering", "bank complete", "complete")
+    for index, digit in enumerate(bank):
+        x, row = viewport.to_screen(index, 0)
+        if state.phase == "entering":
+            x -= round((1 - progress) * width)
+        if state.phase == "discarding" and index not in selected:
+            row += round(progress * (height - y))
+        elif gathering:
+            if index not in selected:
                 continue
-            self._render_single_bank(bank_data, selected_indices, y_pos, completed=True)
-        if not self.is_flying_in and not self.is_falling and not self.is_converging:
-            if self.current_bank_index < len(self.banks):
-                bank = self.banks[self.current_bank_index]
-                self._render_single_bank(
-                    bank, self.selected_indices, self.current_y, completed=False
+            target = (width - len(selected) * 2) // 2 + state.selected.index(index) * 2
+            x = round(x + (target - x) * progress)
+        if 0 <= x < width and 3 <= row < height - 1:
+            color = (
+                46
+                if index in selected
+                else 51
+                if state.start <= index < state.end
+                else 240
+            )
+            if state.phase == "searching" and index == state.candidate:
+                color = 226
+            buffer.put_char(x, row, ink(digit, color))
+            if (
+                state.phase in ("searching", "selected")
+                and state.start <= index < state.end
+                and y + 1 < height - 1
+            ):
+                buffer.put_char(
+                    x, y + 1, ink("^" if index == state.candidate else "─", 51)
                 )
-
-    def _render_single_bank(self, bank, selected_indices, y_pos, completed=False):
-        if completed:
-            num_selected = len(selected_indices)
-            target_width = num_selected * self.digit_spacing
-            start_x = (self.buffer.width() - target_width) // 2
-
-            for idx, bank_idx in enumerate(selected_indices):
-                digit = bank[bank_idx]
-                x_pos = start_x + (idx * self.digit_spacing)
-                colored = bruhcolored(str(digit), 46).colored
-
-                if (
-                    0 <= x_pos < self.buffer.width()
-                    and 0 <= y_pos < self.buffer.height()
-                ):
-                    self.buffer.put_char(x_pos, y_pos, colored)
-        else:
-            total_width = len(bank) * self.digit_spacing
-            start_x = (self.buffer.width() - total_width) // 2
-
-            for i, digit in enumerate(bank):
-                x_pos = start_x + (i * self.digit_spacing)
-
-                if i in selected_indices:
-                    color = 46
-                    intensity = 1.0
-                elif i < self.search_start:
-                    color = 236
-                    intensity = 0.3
-                elif (
-                    self.is_selecting
-                    and self.selected_indices
-                    and i == selected_indices[-1]
-                ):
-                    color = 226 if self.selection_flash_frames % 2 == 0 else 220
-                    intensity = 1.0
-                else:
-                    remaining_positions = (
-                        self.batteries_to_select - self.current_position
-                    )
-                    last_viable_spot = len(bank) - remaining_positions
-
-                    if i <= last_viable_spot:
-                        color = 255
-                        intensity = 1.0
-                    else:
-                        color = 240
-                        intensity = 0.5
-
-                digit_str = str(digit)
-                colored = bruhcolored(digit_str, color).colored
-
-                if (
-                    0 <= x_pos < self.buffer.width()
-                    and 0 <= y_pos < self.buffer.height()
-                ):
-                    self.buffer.put_char(x_pos, y_pos, colored)
-
-    def _render_selection_info(self):
-        pos_text = f"Battery {self.current_position}/{self.batteries_to_select}"
-        self.buffer.put_at(2, 2, pos_text)
-
-        bank_text = f"Bank {self.current_bank_index + 1}/{len(self.banks)}"
-        self.buffer.put_at(2, 3, bank_text)
-
-    def _render_total(self):
-        total_text = f"Total: {self.running_total}"
-        self.buffer.put_at(2, 4, text=total_text)
-
-    def render_frame(self, frame_number: int):
-        if frame_number % self.second_effect_halt == 0:
-            if self.second_effect is not None:
-                self.second_effect.render_frame(frame_number=frame_number)
-                self.buffer.sync_with(self.second_effect.buffer)
-
-        if self.selection_flash_frames > 0:
-            self.selection_flash_frames -= 1
-
-        if self.bank_complete_flash_frames > 0:
-            self.bank_complete_flash_frames -= 1
-
-        if self.completed:
-            self._render_bank_digits()
-            self._render_total()
-            return
-
-        if self.is_flying_in:
-            self.animation_frame += 1
-            self._render_selection_info()
-            self._render_bank_digits()
-            self._render_flying_in_chars()
-            self._render_total()
-
-            if self.animation_frame >= self.flying_in_frames:
-                self.is_flying_in = False
-            return
-
-        if self.is_falling:
-            self.animation_frame += 1
-            self._render_selection_info()
-            self._render_bank_digits()
-            self._render_falling_chars()
-
-            bank = self.banks[self.current_bank_index]
-            total_width = len(bank) * self.digit_spacing
-            start_x = (self.buffer.width() - total_width) // 2
-
-            for bank_idx in self.selected_indices:
-                digit = bank[bank_idx]
-                x_pos = start_x + (bank_idx * self.digit_spacing)
-                colored = bruhcolored(str(digit), 46).colored
-                if (
-                    0 <= x_pos < self.buffer.width()
-                    and 0 <= self.current_y < self.buffer.height()
-                ):
-                    self.buffer.put_char(x_pos, self.current_y, colored)
-
-            self._render_total()
-
-            if self.animation_frame >= self.falling_frames:
-                self.is_falling = False
-                self._start_converging_animation()
-            return
-
-        if self.is_converging:
-            self.animation_frame += 1
-            self._render_selection_info()
-            self._render_bank_digits()
-            self._render_converging_chars()
-            self._render_total()
-
-            if self.animation_frame >= self.converging_frames:
-                self.is_converging = False
-
-                bank_value = int("".join(map(str, self.selected_values)))
-                self.running_total += bank_value
-
-                self.completed_banks.append(
-                    (
-                        self.banks[self.current_bank_index].copy(),
-                        self.selected_indices.copy(),
-                        self.current_y,
-                    )
-                )
-
-                self.completed_banks = [
-                    (bank, indices, y - 1) for bank, indices, y in self.completed_banks
-                ]
-
-                self.completed_banks = [
-                    (bank, indices, y)
-                    for bank, indices, y in self.completed_banks
-                    if y >= -1
-                ]
-
-                self.current_bank_index += 1
-                if self.current_bank_index >= len(self.banks):
-                    self.completed = True
-                    return
-
-                self.current_position = 0
-                self.search_start = 0
-                self.selected_indices = []
-                self.selected_values = []
-                self.is_selecting = False
-
-                self._start_flying_in_animation()
-            return
-
-        if self.is_paused:
-            self.pause_frames_remaining -= 1
-            if self.pause_frames_remaining <= 0:
-                self.is_paused = False
-                if self.current_position >= self.batteries_to_select:
-                    self._start_falling_animation()
-                    return
-
-            self._render_selection_info()
-            self._render_bank_digits()
-            self._render_total()
-            return
-
-        if not self.is_selecting:
-            if self.current_position < self.batteries_to_select:
-                index, value = self._find_next_selection()
-                self.selected_indices.append(index)
-                self.selected_values.append(value)
-                self.search_start = index + 1
-                self.is_selecting = True
-                self.selection_flash_frames = self.selection_pause_frames
-                self.is_paused = True
-                self.pause_frames_remaining = self.selection_pause_frames
-                self.current_position += 1
-            else:
-                self.bank_complete_flash_frames = self.bank_complete_pause_frames
-                self.is_paused = True
-                self.pause_frames_remaining = self.bank_complete_pause_frames
-        else:
-            if self.selection_flash_frames <= 0:
-                self.is_selecting = False
-
-        self._render_selection_info()
-        self._render_bank_digits()
-        self._render_total()
+    chosen = "".join(bank[index] for index in state.selected)
+    buffer.put_at(
+        0, 3, f"Bank {state.bank + 1}/{len(banks)} | window [{state.start}:{state.end})"
+    )
+    if y + 3 < height - 1:
+        label(buffer, 0, y + 3, f"Chosen: {chosen or '-'}", 46)
+    for row, (number, value) in enumerate(reversed(state.recent), y + 5):
+        if row >= height - 1:
+            break
+        label(buffer, 0, row, f"Bank {number}: {value}", 240)
 
 
-def animate(screen: Screen):
-    renderer = EffectRenderer(
-        screen=screen,
-        frames=float("inf"),
-        frame_time=0.005,
-        effect_type="static",
-        background=" ",
-        transparent=False,
+def run(banks, *, count=12, **options):
+    if not banks or any(not 1 <= count <= len(bank) for bank in banks):
+        raise ValueError("Every bank must contain at least the requested battery count")
+    return run_animation(
+        bank_states(banks, count),
+        lambda state, buffer: draw_bank(banks, state, buffer),
+        title=f"Day 3 | {count} batteries",
+        describe=lambda state: f"Bank {state.bank + 1}/{len(banks)} | Picked {len(state.selected)}/{count} | Total: {state.total}",
+        **options,
     )
 
-    twinkle = effect_registry.create(
-        "twinkle",
-        Buffer(screen.height, screen.width),
-        " ",
-        settings=TwinkleSettings(density=0.05),
+
+def main(argv=None):
+    parser = argument_parser(__doc__, __file__, "data", rate=30)
+    parser.add_argument(
+        "--digits", type=positive_integer, help="Override the part's battery count"
     )
-
-    fireworks = effect_registry.create(
-        "firework",
-        Buffer(screen.height, screen.width),
-        " ",
-        settings=FireworkSettings(
-            firework_type="random", color_enabled=True, color_type="twotone", rate=0.05
-        ),
-    )
-    if isinstance(fireworks, FireworkEffect):
-        fireworks.set_second_effect(twinkle)
-
-    renderer.effect = BatteryBankEffect(
-        buffer=Buffer(screen.height, screen.width),
-        background=" ",
-        data_file="data",
-        batteries_to_select=12,
-        second_effect=fireworks,
-        second_effect_halt=20,
-        selection_pause_frames=8,
-        bank_complete_pause_frames=30,
-        digit_spacing=1,
-        flying_in_frames=50,
-        falling_frames=50,
-        converging_frames=50,
-    )
-
-    renderer.run()
+    args = parser.parse_args(argv)
+    banks = load_input(parser, args, parse_banks)
+    count = args.digits if args.digits is not None else 2 if args.part == 1 else 12
+    if any(len(bank) < count for bank in banks):
+        parser.error("Every bank must contain at least the requested battery count")
+    return run(banks, count=count, **run_options(args))
 
 
-if __name__ in ["__main__", "day03_animate"]:
-    Screen.show(animate)
+if __name__ == "__main__":
+    main()

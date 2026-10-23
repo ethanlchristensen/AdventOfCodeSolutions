@@ -2,14 +2,14 @@
 
 [[package]]
 name = "bruhanimate"
-version = "0.2.106"
-description = "ASCII Termnial Animation Package"
+version = "1.0.0"
+description = "Composable ASCII terminal animations and solver playback"
 optional = false
 python-versions = "<4.0,>=3.13"
 groups = ["main"]
 files = [
-    {file = "bruhanimate-0.2.106-py3-none-any.whl", hash = "sha256:3336edc79994d0c684dda06c7dee7181da11e5cf62c6eeadf53e7e25fc718ed6"},
-    {file = "bruhanimate-0.2.106.tar.gz", hash = "sha256:d7dd562e361f8c4909d58dc30b6b39cba63e4df6fb41dc0138055d984d67fac2"},
+    {file = "bruhanimate-1.0.0-py3-none-any.whl", hash = "sha256:e790f4c5aac8f1a11822c115713406722528b75c39ea509a115cfdd07cccc86d"},
+    {file = "bruhanimate-1.0.0.tar.gz", hash = "sha256:5cf74fdcef6680f1e035db942a5516cdb869c78a7020244ed66472005bafa945"},
 ]
 
 [package.dependencies]
@@ -546,4 +546,4 @@ zstd = ["backports-zstd (>=1.0.0) ; python_version < \"3.14\""]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<4.0"
-content-hash = "cc05abdf2c06d83c30bca93a8dd09066e0c26211b359b5aa77f86b9cb4206443"
+content-hash = "15aa17c2abb4c6906599c2f020d5d4ec9e43d8d1285b7601067a47e2289fc4b9"

@@ -1,251 +1,277 @@
-from bruhcolor import bruhcolored as bc
-from bruhanimate import (
-    Screen,
-    BaseEffect,
-    EffectRenderer,
-    Buffer,
-    PlasmaEffect,
-    TwinkleEffect,
-    SnowEffect,
-    FireworkEffect,
-    text_to_image,
+"""Animate Warehouse Woes with lazy snapshots and atomic crate pushes.
+
+Part 1 uses single-cell crates; part 2 expands each source column into two cells.
+Solver steps are attempted moves, independently paced by the shared v1 player.
+"""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass, replace
+from pathlib import Path
+
+from bruhanimate import GridViewport
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from animation_support import (  # noqa: E402
+    argument_parser,
+    ink,
+    label,
+    load_input,
+    run_animation,
+    run_options,
 )
 
-# DECAY_VALUES = [17, 18, 19, 20, 21]
-DECAY_VALUES = list(range(232, 255))
-# DECAY_VALUES = [val for val in DECAY_VALUES for _ in range(3)]
+Point = tuple[int, int]
+DIRECTIONS = {"^": (0, -1), ">": (1, 0), "v": (0, 1), "<": (-1, 0)}
 
 
-class Decay:
-    def __init__(
-        self, x: int, y: int, char: str, values: list[int] = DECAY_VALUES
-    ) -> None:
-        self.x = x
-        self.y = y
-        self.char = char
-        self.values = values
-        self.life = len(self.values) - 1
-        self.active = True
-        self.current_value = self.values[self.life]
+@dataclass(frozen=True)
+class Warehouse:
+    """Immutable geometry; boxes store left anchors, never detached halves."""
 
-    def update(self):
-        self.life -= 1
-        if self.life < 0:
-            self.active = False
-            return
-        self.value = self.values[self.life]
+    width: int
+    height: int
+    walls: frozenset[Point]
+    boxes: frozenset[Point]
+    robot: Point
+    box_width: int
 
-    def get_colored_tile(self):
-        return bc(text=self.char, color=self.values[self.life]).colored
+    @property
+    def score(self):
+        """Return GPS coordinates of all box left anchors."""
+        return sum(100 * y + x for x, y in self.boxes)
 
-
-class AdventOfCodeDay15Effect(BaseEffect):
-    def __init__(
-        self,
-        buffer: Buffer,
-        background: str,
-        part: str = "one",
-        data_file: str = "data",
-        second_effect: PlasmaEffect | TwinkleEffect | SnowEffect = None,
-        second_effect_halt: int = 1,
-    ):
-        super(AdventOfCodeDay15Effect, self).__init__(buffer, background)
-        self.part = part
-        self.data_file = data_file
-        self.board = None
-        self.moves = None
-        self.char_to_color = {
-            "#": 239,
-            " ": None,
-            "@": 27,
-            "[": 91,
-            "]": 91,
-            "O": 91,
+    def occupancy(self):
+        """Map occupied cells to whole-crate anchors for dependency discovery."""
+        return {
+            (x + offset, y): (x, y)
+            for x, y in self.boxes
+            for offset in range(self.box_width)
         }
-        self.decay_tiles = []
-        self.second_effect = second_effect
-        self.second_effect_halt = second_effect_halt
-        self.processed_move_images = []
-        self.__load_data()
 
-    def __load_data(self):
-        with open(self.data_file, "r") as file:
-            lines = file.readlines()
-            if self.part == "two":
-                for idx in range(len(lines) - 1):
-                    lines[idx] = (
-                        lines[idx]
-                        .replace("#", "##")
-                        .replace("O", "[]")
-                        .replace(".", "  ")
-                        .replace("@", "@ ")
-                    )
-            data = [
-                list(line.strip().replace(".", " "))
-                for line in lines
-                if line.strip() != ""
-            ]
-            if self.data_file == "datasmall4":
-                self.board = data[:-1]
-                self.moves = data[-1][: len(data[-1]) // 4]
+
+@dataclass(frozen=True)
+class Snapshot:
+    """One immutable attempted move and a bounded recent robot trail."""
+
+    warehouse: Warehouse
+    phase: str
+    index: int
+    total: int
+    moves: str
+    move: str = ""
+    pushed: frozenset[Point] = frozenset()
+    blocked: frozenset[Point] = frozenset()
+    trail: tuple[Point, ...] = ()
+    pushes: int = 0
+    failures: int = 0
+
+
+def parse(text):
+    """Validate a rectangular source map and all whitespace-wrapped moves.
+
+    A blank line separates map and movement stream. Open map edges are allowed;
+    stepping beyond the map is blocked. Input is never truncated or substituted.
+    """
+    lines = text.splitlines()
+    separator = next((i for i, line in enumerate(lines) if not line.strip()), None)
+    if separator is None or separator == 0:
+        raise ValueError("Expected a warehouse map, a blank line, then moves")
+    rows = tuple(lines[:separator])
+    if not rows[0] or any(len(row) != len(rows[0]) for row in rows):
+        raise ValueError("Warehouse map must be nonempty and rectangular")
+    if any(char not in "#.@O" for row in rows for char in row):
+        raise ValueError("Warehouse map accepts only # . @ O")
+    if sum(row.count("@") for row in rows) != 1:
+        raise ValueError("Warehouse map must contain exactly one robot")
+    moves = "".join("".join(lines[separator + 1 :]).split())
+    if any(move not in DIRECTIONS for move in moves):
+        raise ValueError("Moves must be ^ > v <, optionally separated by whitespace")
+    return rows, moves
+
+
+def make_warehouse(rows, part=2):
+    """Expand a validated source map for the selected puzzle part."""
+    if part not in (1, 2):
+        raise ValueError("part must be 1 or 2")
+    scale = part
+    walls, boxes, robot = set(), set(), None
+    for y, row in enumerate(rows):
+        for x, char in enumerate(row):
+            anchor = (x * scale, y)
+            if char == "#":
+                walls.update((anchor[0] + offset, y) for offset in range(scale))
+            elif char == "O":
+                boxes.add(anchor)
+            elif char == "@":
+                robot = anchor
+    return Warehouse(
+        len(rows[0]) * scale,
+        len(rows),
+        frozenset(walls),
+        frozenset(boxes),
+        robot,
+        scale,
+    )
+
+
+def attempt(warehouse, move):
+    """Resolve the complete crate dependency graph before committing a move.
+
+    Vertical pushes can fan out into several wide crates. A single obstruction
+    rejects the whole move, preserving every crate and both halves atomically.
+    Returns the new warehouse, affected anchors, and obstructing cells.
+    """
+    dx, dy = DIRECTIONS[move]
+    occupancy = warehouse.occupancy()
+    target = warehouse.robot[0] + dx, warehouse.robot[1] + dy
+
+    def obstacle(point):
+        x, y = point
+        return (
+            point in warehouse.walls
+            or not 0 <= x < warehouse.width
+            or not 0 <= y < warehouse.height
+        )
+
+    if obstacle(target):
+        return warehouse, frozenset(), frozenset((target,))
+    pending = [occupancy[target]] if target in occupancy else []
+    moving, blocked = set(pending), set()
+    for x, y in pending:
+        for offset in range(warehouse.box_width):
+            destination = x + offset + dx, y + dy
+            if obstacle(destination):
+                blocked.add(destination)
+            elif (other := occupancy.get(destination)) is not None:
+                if other != (x, y) and other not in moving:
+                    moving.add(other)
+                    pending.append(other)
+    if blocked:
+        return warehouse, frozenset(moving), frozenset(blocked)
+    shifted = frozenset((x + dx, y + dy) for x, y in moving)
+    result = replace(
+        warehouse, robot=target, boxes=(warehouse.boxes - moving) | shifted
+    )
+    return result, shifted, frozenset()
+
+
+def snapshots(parsed, part=2):
+    """Yield initial, attempted-move, and final states without saving a trace."""
+    rows, moves = parsed
+    warehouse = make_warehouse(rows, part)
+    trail, pushes, failures = (), 0, 0
+    yield Snapshot(warehouse, "ready", 0, len(moves), moves)
+    for index, move in enumerate(moves, 1):
+        previous = warehouse.robot
+        warehouse, pushed, blocked = attempt(warehouse, move)
+        if blocked:
+            failures += 1
+            phase = "blocked"
+        else:
+            trail = (*trail[-15:], previous)
+            pushes += bool(pushed)
+            phase = "push" if pushed else "move"
+        yield Snapshot(
+            warehouse,
+            phase,
+            index,
+            len(moves),
+            moves,
+            move,
+            pushed,
+            blocked,
+            trail,
+            pushes,
+            failures,
+        )
+    yield Snapshot(
+        warehouse,
+        "complete",
+        len(moves),
+        len(moves),
+        moves,
+        trail=trail,
+        pushes=pushes,
+        failures=failures,
+    )
+
+
+def draw(buffer, state):
+    """Paint a clipped robot-following viewport without changing the snapshot."""
+    if buffer.height() < 5 or buffer.width() == 0:
+        return
+    board = state.warehouse
+    width, height = buffer.width(), buffer.height() - 5
+    camera = (
+        min(max(0, board.robot[0] - width // 2), max(0, board.width - width)),
+        min(max(0, board.robot[1] - height // 2), max(0, board.height - height)),
+    )
+    viewport = GridViewport(
+        buffer,
+        board.width,
+        board.height,
+        region=(0, 3, width, height),
+        camera=camera,
+    )
+    occupancy = board.occupancy()
+    trail = {point: index for index, point in enumerate(state.trail)}
+    for y in range(camera[1], min(board.height, camera[1] + height)):
+        for x in range(camera[0], min(board.width, camera[0] + width)):
+            point = x, y
+            if point == board.robot:
+                char, color = "@", 51
+            elif point in occupancy:
+                anchor = occupancy[point]
+                char = "O" if board.box_width == 1 else "[" if point == anchor else "]"
+                color = (
+                    196
+                    if state.blocked and anchor in state.pushed
+                    else 226
+                    if anchor in state.pushed
+                    else 141
+                )
+            elif point in state.blocked:
+                char, color = "X", 196
+            elif point in board.walls:
+                char, color = "#", 240
+            elif point in trail:
+                char, color = ".", 236 + trail[point] // 2
             else:
-                self.board = data[:-1]
-                self.moves = data[-1]
-
-    def get_padding(self):
-        return (self.buffer.width() - (len(self.board[0]))) // 2, (
-            self.buffer.height() - len(self.board)
-        ) // 2
-
-    def get_direction(self, char: str):
-        if char == "^":
-            return (0, -1)
-        if char == ">":
-            return (1, 0)
-        if char == "<":
-            return (-1, 0)
-        if char == "v":
-            return (0, 1)
-
-    def get_robot_position(self):
-        for y in range(len(self.board)):
-            for x in range(len(self.board[0])):
-                if self.board[y][x] == "@":
-                    return (x, y)
-
-    def get_gps_coordinates(self):
-        total = 0
-        for y in range(len(self.board)):
-            for x in range(len(self.board[0])):
-                if self.board[y][x] in "O[":
-                    total += (100 * y) + x
-        return total
-
-    def place_board_on_buffer(self):
-        px, py = self.get_padding()
-        for y in range(len(self.board)):
-            for x in range(len(self.board[0])):
-                char = self.board[y][x]
-                if char == " ":
-                    continue
-                colored_value = bc(text=char, color=self.char_to_color[char]).colored
-                self.buffer.put_char(
-                    x=x + px, y=y + py, val=colored_value, transparent=True
-                )
-        for idx in range(len(self.decay_tiles)):
-            tile = self.decay_tiles[idx]
-            if self.buffer.get_char(tile.x + px, tile.y + py) == " ":
-                self.buffer.put_char(
-                    x=tile.x + px,
-                    y=tile.y + py,
-                    val=tile.get_colored_tile(),
-                    transparent=True,
-                )
-            self.decay_tiles[idx].update()
-
-        self.decay_tiles = [tile for tile in self.decay_tiles if tile.active]
-
-    def generate_next_board_state(self, frame_number: int):
-        if frame_number >= len(self.moves):
-            return
-        move = self.moves[frame_number]
-        move_image = text_to_image(text=move)
-        self.processed_move_images.append(move_image)
-        for y in range(len(move_image)):
-            self.buffer.put_at_center(
-                y=self.buffer.height() - len(move_image) + y, text=move_image[y]
-            )
-
-        robot_position = self.get_robot_position()
-        can_move = True
-        cords_to_move = [robot_position]
-        iteration = 0
-        dx, dy = self.get_direction(move)
-        while iteration < len(cords_to_move):
-            x, y = cords_to_move[iteration]
-            nx, ny = x + dx, y + dy
-            if self.board[ny][nx] == "O":
-                if (nx, ny) not in cords_to_move:
-                    cords_to_move.append((nx, ny))
-            elif self.board[ny][nx] in "[]":
-                if (nx, ny) not in cords_to_move:
-                    cords_to_move.append((nx, ny))
-                if self.board[ny][nx] == "]":
-                    addition = (nx - 1, ny)
-                    if addition not in cords_to_move:
-                        cords_to_move.append(addition)
-                elif self.board[ny][nx] == "[":
-                    addition = (nx + 1, ny)
-                    if addition not in cords_to_move:
-                        cords_to_move.append(addition)
-            elif self.board[ny][nx] == "#":
-                can_move = False
-                break
-            iteration += 1
-
-        if not can_move:
-            return
-        tmp = [
-            [self.board[y][x] for x in range(len(self.board[0]))]
-            for y in range(len(self.board))
-        ]
-        for x, y in cords_to_move:
-            tmp[y][x] = " "
-        for x, y in cords_to_move:
-            tmp[y + dy][x + dx] = self.board[y][x]
-            if self.board[y][x] == "@":
-                self.decay_tiles.append(Decay(x=x, y=y, char="@"))
-        self.board[:] = tmp[:]
-
-    def render_frame(self, frame_number: int):
-        if frame_number % self.second_effect_halt == 0:
-            if self.second_effect is not None:
-                self.second_effect.render_frame(frame_number=frame_number)
-                self.buffer.sync_with(self.second_effect.buffer)
-        self.place_board_on_buffer()
-        self.generate_next_board_state(frame_number)
-
-        gps_score = self.get_gps_coordinates()
-        digit_images = []
-        for number in list(str(gps_score)):
-            digit_images.append(text_to_image(number))
-        full_digit_rows = ["" for _ in range(len(digit_images[0]))]
-        for digit in digit_images:
-            for y in range(len(digit) - 1):
-                full_digit_rows[y] += digit[y]
-        for idx, row in enumerate(full_digit_rows):
-            self.buffer.put_at_center(y=idx, text=row)
+                char, color = ".", 234
+            viewport.put(x, y, ink(char, color))
+    label(buffer, 0, 2, "@ robot | gold push | red blocked | . trail", 245)
+    begin = max(0, state.index - 12)
+    end = min(state.total, begin + max(1, buffer.width() - 8))
+    label(buffer, 0, buffer.height() - 2, "Moves: ", 245)
+    for offset, move in enumerate(state.moves[begin:end], 7):
+        index = begin + offset - 7
+        color = 226 if index == state.index - 1 else 240 if index < state.index else 51
+        label(buffer, offset, buffer.height() - 2, move, color)
 
 
-def animate(screen: Screen):
-    renderer = EffectRenderer(
-        screen=screen,
-        frames=float("inf"),
-        frame_time=0,
-        effect_type="static",
-        background=" ",
-        transparent=False,
+def describe(state):
+    """Summarize exact progress and GPS score, independent of viewport size."""
+    return (
+        f"Move {state.index}/{state.total} {state.move} | GPS {state.warehouse.score}"
+        f" | pushes {state.pushes} | blocked {state.failures}"
     )
 
-    twinke_effect = TwinkleEffect(Buffer(screen.height, screen.width), " ")
 
-    firework_effect = FireworkEffect(Buffer(screen.height, screen.width), " ")
-    firework_effect.set_firework_color_enabled(True)
-    firework_effect.set_firework_color_type("twotone")
-    firework_effect.set_second_effect(second_effect=twinke_effect)
-    firework_effect.set_firework_type("random")
-
-    renderer.effect = AdventOfCodeDay15Effect(
-        buffer=Buffer(screen.height, screen.width),
-        background=" ",
-        part="two",
-        data_file="datasmall4",  # from advent of code
-        second_effect=firework_effect,
-        second_effect_halt=3,
+def main(argv=None):
+    """Validate input, then let the shared player own the finite animation."""
+    parser = argument_parser(__doc__, __file__, "datasmall4", rate=16)
+    args = parser.parse_args(argv)
+    parsed = load_input(parser, args, parse)
+    return run_animation(
+        snapshots(parsed, args.part),
+        lambda state, buffer: draw(buffer, state),
+        title=f"2024 Day 15: Warehouse Woes | Part {args.part}",
+        describe=describe,
+        **run_options(args),
     )
 
-    renderer.run()
 
-
-if __name__ in ["__main__", "day15_animate"]:
-    Screen.show(animate)
+if __name__ == "__main__":
+    main()
